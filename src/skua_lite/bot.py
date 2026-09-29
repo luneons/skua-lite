@@ -455,16 +455,27 @@ class AQWBot:
             # Owner follow commands are handled here rather than in the AI
             # router: this layer already knows the active owner UID, and the
             # mirror must not wait on a language-model round trip.
-            follow_command = parse_follow_command(msg)
-            if follow_command is not None and self._is_active_owner(
+            follow_cmd = parse_follow_command(msg)
+            if follow_cmd is not None and self._is_active_owner(
                 sender, chat["user_id"]
             ):
-                if follow_command == "start":
+                if follow_cmd == "start":
                     self.follow.start(sender, chat["user_id"])
+                    self.set_afk(False)
                     self.on_log(f"[FOLLOW] mulai mengikuti {sender}")
-                else:
+                elif follow_cmd == "stop":
+                    was_following = self.follow.is_following
                     self.follow.stop()
-                    self.on_log("[FOLLOW] berhenti mengikuti owner")
+                    if was_following:
+                        self._return_home_and_afk()
+                        self.on_log("[FOLLOW] berhenti; kembali ke lokasi awal + AFK")
+                elif isinstance(follow_cmd, tuple) and follow_cmd:
+                    # "Ikuti <nama>" -> bind to that display name; any UID the
+                    # server reports as this player is then followed. The only
+                    # way to leave this target is the owner saying Berhenti.
+                    self.follow.start(follow_cmd[0], None)
+                    self.set_afk(False)
+                    self.on_log(f"[FOLLOW] mengikuti pemain: {follow_cmd[0]}")
                 return
             if self.ai_router is not None:
                 self.ai_router.note_chat(sender, msg, channel)
@@ -495,6 +506,42 @@ class AQWBot:
                 == " ".join(str(active_name).split()).casefold()
             )
         return False
+
+    def _return_home_and_afk(self) -> None:
+        """After `Berhenti`: go back to the starting spot, then AFK.
+
+        The worker thread owns the socket; blocking here would stall packet
+        handling. So run the trip in a short-lived thread, and if we are
+        already in the home map just re-place the character.
+        """
+        if self.state != BotState.IN_MAP:
+            return
+
+        def _work() -> None:
+            try:
+                if self.target_map and self.current_map != self.target_map:
+                    self.on_log(f"[FOLLOW] kembali ke {self.target_map}")
+                    self.join_map(self.target_map)
+                self._send_raw(sfs.move_to_cell_packet(
+                    room=self.room_id, cell=self.cell or config.DEFAULT_CELL,
+                    pad=self.pad or config.DEFAULT_PAD,
+                ))
+                if self.move_on_join is not None:
+                    x, y, speed = self.move_on_join
+                    self._send_raw(sfs.move_packet(
+                        room=self.room_id, x=x, y=y, speed=speed
+                    ))
+                self.set_afk(True)
+            except Exception as exc:  # noqa: BLE001
+                self.on_log(f"[FOLLOW] gagal kembali ke lokasi awal: {exc}")
+                try:
+                    self.set_afk(True)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        threading.Thread(
+            target=_work, name="Mele-Follow-Return", daemon=True
+        ).start()
 
     def _send_keepalive(self) -> None:
         # Kirim roundTrip ping (XML sys) agar server tidak disconnect karena idle

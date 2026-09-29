@@ -42,6 +42,13 @@ def _owner_chat(b, text, uid=21623, name="mele"):
     )
 
 
+def _uER(b, username, uid):
+    b._handle_server_packet(
+        f"<msg t='sys'><body action='uER' r='273'>"
+        f"<u i='{uid}' n='{username}' /></body></msg>"
+    )
+
+
 def _sent(b):
     out = []
     for call in b._client.send.call_args_list:
@@ -83,7 +90,7 @@ def test_owner_stop_phrase_ends_follow():
 
     _owner_chat(b, "Ikuti aku")
     assert b.follow.is_following is True
-    _owner_chat(b, "Berhenti ikuti aku")
+    _owner_chat(b, "Berhenti")
     assert b.follow.is_following is False
 
 
@@ -195,6 +202,126 @@ def test_follow_goto_guard_resets_when_owner_returns():
     b._handle_server_packet("%xt%exitArea%-1%21623%mele%")
     gotos = [p for p in _sent(b) if "goto" in p]
     assert len(gotos) == 1
+
+
+def test_owner_follow_other_player_command_starts_and_mirrors_target():
+    b, _ = _follow_bot()
+    b.ai_router.owner_arrived(21623, "mele")
+    _uER(b, "alice", 777)
+
+    _owner_chat(b, "Ikuti alice")
+    assert b.follow.is_following is True
+    assert b.follow.owner_name == "alice"
+    b._client.send.reset_mock()
+
+    b._handle_server_packet("%xt%uotls%-1%alice%strFrame:Boss,strPad:Left%")
+    b._handle_server_packet("%xt%uotls%-1%alice%tx:1,ty:2,sp:10%")
+    sent = _sent(b)
+    assert "%xt%zm%moveToCell%273%Boss%Left%" in sent
+    assert "%xt%zm%mv%273%1%2%10%" in sent
+
+    # The owner's own movement is no longer mirrored while another target is
+    # being followed.
+    b._client.send.reset_mock()
+    _owner_uotls(b, strFrame="Boss", strPad="Left")
+    assert "Boss" not in " ".join(_sent(b))
+
+
+def test_follow_other_player_ignores_strangers_and_owner_commands_still_gate():
+    b, _ = _follow_bot()
+    b.ai_router.owner_arrived(21623, "mele")
+    _uER(b, "alice", 777)
+
+    # Only the active owner can aim the follower at someone else.
+    _owner_chat(b, "Ikuti alice", uid=777, name="alice")
+    assert b.follow.is_following is False
+
+    _owner_chat(b, "Ikuti alice")
+    assert b.follow.is_following is True
+
+    b._client.send.reset_mock()
+    b._handle_server_packet("%xt%uotls%-1%bob%strFrame:Boss,strPad:Left%")
+    b._handle_server_packet("%xt%uotls%-1%bob%tx:9,ty:9,sp:10%")
+    assert _sent(b) == []
+
+
+def _wait_for(predicate, timeout=3.0):
+    """Poll until the background return-home thread has finished its work."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_stop_then_return_home_moves_to_home_and_sets_afk():
+    b, _ = _follow_bot()
+    b.target_map = "yulgar-14045"
+    b.current_map = "yulgar-14045"  # already home: no map join needed
+    b.ai_router.owner_arrived(21623, "mele")
+
+    _owner_chat(b, "Ikuti alice")
+    assert b.follow.is_following is True
+    b._client.send.reset_mock()
+
+    _owner_chat(b, "Berhenti")
+    assert b.follow.is_following is False
+    assert _wait_for(lambda: b.is_afk is True) is True
+
+    sent = _sent(b)
+    assert "%xt%zm%moveToCell%273%Enter%Spawn%" in sent
+    assert "%xt%zm%mv%273%850%302%10%" in sent
+    assert sent[-1] == "%xt%zm%afk%1%true%"
+
+
+def test_stop_returns_home_through_join_when_followed_away(monkeypatch):
+    b, _ = _follow_bot()
+    b.target_map = "yulgar-14045"
+    b.current_map = "lair-97940"
+    b.ai_router.owner_arrived(21623, "mele")
+    _owner_chat(b, "Ikuti alice")
+    b._client.send.reset_mock()
+
+    joined: list[str] = []
+
+    def fake_join(map_name):
+        joined.append(map_name)
+        b.current_map = map_name
+        b.room_id = 273
+
+    monkeypatch.setattr(b, "join_map", fake_join)
+    _owner_chat(b, "Berhenti")
+
+    assert _wait_for(lambda: b.is_afk is True) is True
+    assert joined == ["yulgar-14045"]
+    assert b.follow.is_following is False
+    assert "%xt%zm%afk%1%true%" in _sent(b)
+
+
+def test_stop_while_not_following_does_not_yank_bot_home():
+    b, _ = _follow_bot()
+    b.ai_router.owner_arrived(21623, "mele")
+    b._client.send.reset_mock()
+
+    _owner_chat(b, "Berhenti")
+
+    # Nothing to stop: the word must not move the bot or make it AFK.
+    assert _sent(b) == []
+    assert b.is_afk is False
+
+
+def test_stop_word_is_still_gated_to_active_owner():
+    b, _ = _follow_bot()
+    b.ai_router.owner_arrived(21623, "mele")
+
+    _owner_chat(b, "Ikuti alice")
+    assert b.follow.is_following is True
+
+    _owner_chat(b, "Berhenti", uid=777, name="alice")
+    assert b.follow.is_following is True
 
 
 def test_no_follow_traffic_without_active_mode():

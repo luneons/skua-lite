@@ -286,10 +286,12 @@ kata `Master`/`Tuan`. Jawab singkat sesuai pertanyaan, tanpa basa-basi. Pemilik 
 persis `MODE NORMAL` untuk membuka lock sambil mempertahankan AI ON **dan Admin Mode**.
 Pemilik dapat mengirim perintah admin khusus pemilik lewat prefix `!`
 (hanya UID/nama pemilik aktif yang dieksekusi; pemain lain diabaikan):
-Selain itu tersedia perintah follow biasa `Ikuti aku` (bot menyalin
-gerak cell/koordinat owner; saat owner keluar area/map, bot otomatis
-`/goto <owner>` lalu melanjutkan mirroring saat update owner masuk lagi)
-dan `Berhenti ikuti aku` untuk berhenti.
+Selain itu tersedia perintah follow biasa `Ikuti aku` (mengikuti owner)
+atau `Ikuti <nick>` (mengikuti pemain yang dipilih owner). Bot menyalin
+gerak cell/koordinat target; saat target keluar area/map, bot otomatis
+`/goto <target>` lalu melanjutkan mirroring saat update target masuk lagi.
+Perintah `Berhenti` menghentikan follow, mengembalikan bot ke map/cell/
+koordinat awal, lalu mengaktifkan AFK.
 
     !cari <query>     -> riset web umum via hermes agent (tidak terbatas AQW)
     !join <map>       -> pindah map/room, misal `!join yulgar`

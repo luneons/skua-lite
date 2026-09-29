@@ -19,9 +19,9 @@ from typing import Iterable
 from . import sfs
 
 _START_COMMANDS = frozenset({"ikuti aku"})
-_STOP_COMMANDS = frozenset(
-    {"berhenti ikuti aku", "stop ikuti aku", "jangan ikuti aku"}
-)
+# `Berhenti` is the only word the owner asked for; the older verbose phrases
+# are deliberately NOT commands any more so they fall through as normal chat.
+_STOP_COMMANDS = frozenset({"berhenti"})
 
 # Movement fields that belong to a cell change vs. a position update.
 _CELL_FIELDS = ("strFrame", "strPad")
@@ -33,13 +33,26 @@ def normalize_command(text: str) -> str:
     return " ".join((text or "").split()).casefold()
 
 
-def parse_follow_command(text: str) -> str | None:
-    """Return ``"start"``/``"stop"`` for the exact owner phrases, else None."""
-    normalized = normalize_command(text)
+def parse_follow_command(text: str) -> str | tuple[str] | None:
+    """Return start/stop for the owner phrases, else None.
+
+    ``"start"`` = follow the speaker (``Ikuti aku``). A start with an explicit
+    target (``Ikuti alice``) returns ``(target,)``; the bot then binds any UID
+    to that display name when its ``uotls`` updates arrive. ``"stop"`` keeps
+    accepting the old longer phrases so prior muscle memory still works.
+    """
+    clean = " ".join((text or "").split())
+    normalized = clean.casefold()
     if normalized in _START_COMMANDS:
         return "start"
     if normalized in _STOP_COMMANDS:
         return "stop"
+    if normalized.startswith("ikuti "):
+        target = clean[len("ikuti "):].strip()
+        # `Ikuti aku ...` is a malformed self-follow command, not a player
+        # named "aku ...".
+        if target and not target.casefold().startswith("aku "):
+            return (target,)
     return None
 
 
@@ -69,7 +82,7 @@ class OwnerFollower:
             return self._owner_name
 
     def start(self, owner_name: str, owner_id: int | None = None) -> None:
-        """Begin following ``owner_name``; resets the last-known snapshot."""
+        """Begin following one player; resets the last-known snapshot."""
         clean = " ".join((owner_name or "").split())
         with self._lock:
             self._following = True

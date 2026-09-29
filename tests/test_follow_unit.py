@@ -9,15 +9,30 @@ from skua_lite.follow import (
 def test_parse_follow_command_matches_expected_phrases():
     assert parse_follow_command("Ikuti aku") == "start"
     assert parse_follow_command("  IKUTI   AKU  ") == "start"
-    assert parse_follow_command("Berhenti ikuti aku") == "stop"
-    assert parse_follow_command("Stop ikuti aku") == "stop"
+    assert parse_follow_command("Berhenti") == "stop"
+    assert parse_follow_command("  berhenti  ") == "stop"
+
+
+def test_parse_follow_command_reads_explicit_target_name():
+    assert parse_follow_command("Ikuti alice") == ("alice",)
+    assert parse_follow_command("ikuti  ME LE ") == ("ME LE",)
+    assert parse_follow_command("Ikuti alice bob") == ("alice bob",)
+
+
+def test_parse_follow_command_replaces_old_stop_phrases():
+    assert parse_follow_command("Berhenti ikuti aku") is None
+    assert parse_follow_command("Stop ikuti aku") is None
+    assert parse_follow_command("Stop") is None
 
 
 def test_parse_follow_command_rejects_lookalikes():
     assert parse_follow_command("ikuti aku dong") is None
     assert parse_follow_command("tolong ikuti aku") is None
     assert parse_follow_command("jangan ikuti aku ya?") is None
+    assert parse_follow_command("Berhenti dulu") is None
+    assert parse_follow_command("Ikuti") is None
     assert normalize_command("  Ikuti\tAku ") == "ikuti aku"
+    assert normalize_command("  Ikuti\tAlice ") == "ikuti alice"
 
 
 def test_follower_ignores_non_owner_and_dedupes_updates():
