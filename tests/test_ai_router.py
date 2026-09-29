@@ -9,7 +9,41 @@ from skua_lite.ai_router import (
     _safe_non_owner_reply,
     _safe_reply,
     mentions_mele,
+    _GREETING_TEMPLATES,
 )
+
+
+def test_regular_arrival_greetings_rotate_through_requested_variants():
+    sent: list[str] = []
+    router = AIChatRouter(generator=Mock(), send_chat=sent.append)
+
+    for _ in range(len(_GREETING_TEMPLATES)):
+        assert router.user_arrived("Alice") is True
+
+    assert sent == [
+        "Halo Alice",
+        "Woy Alice",
+        "Oitt Alice baru dateng.",
+        "Yoo! Alice my gang!",
+        "Wew ada si Alice",
+        "Lahh itukan si Alice",
+        "Kok ada Alice disini",
+        "Yaelah Alice lagi",
+        "Hai sayangku Alice baru datang.",
+    ]
+
+
+def test_arrival_greeting_rotation_wraps_and_respects_150_chars():
+    sent: list[str] = []
+    router = AIChatRouter(generator=Mock(), send_chat=sent.append)
+    long_name = "A" * 200
+
+    for _ in range(len(_GREETING_TEMPLATES) + 1):
+        assert router.user_arrived(long_name) is True
+
+    assert sent[0].startswith("Halo ")
+    assert sent[-1] == sent[0]
+    assert all(len(text) <= 150 for text in sent)
 
 
 def test_safe_reply_strips_internal_research_and_bracket_markers():

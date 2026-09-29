@@ -256,6 +256,20 @@ def _safe_reply(text: str, limit: int = 150) -> str:
 
 _MEMORY_TURNS = 12
 _MEMORY_SPEAKERS = 40
+# Deterministic rotation for the regular (non-owner) Yulgar arrival greeting.
+# Cycles in order per bot session instead of randomizing, so the greeting is
+# varied but a test can still assert an exact sequence.
+_GREETING_TEMPLATES = (
+    "Halo {name}",
+    "Woy {name}",
+    "Oitt {name} baru dateng.",
+    "Yoo! {name} my gang!",
+    "Wew ada si {name}",
+    "Lahh itukan si {name}",
+    "Kok ada {name} disini",
+    "Yaelah {name} lagi",
+    "Hai sayangku {name} baru datang.",
+)
 # A question about class equipment should carry the loadout vocabulary even if
 # the user omits the word "enhancement" (e.g. "SC pake ench apa?").
 _LOADOUT_QUESTION_RE = re.compile(
@@ -311,6 +325,7 @@ class AIChatRouter:
         self._send_chat = send_chat
         self._on_log = on_log or (lambda _message: None)
         self._max_reply_chars = max_reply_chars
+        self._greeting_index = 0
         self._enabled = False
         self._owner_lock = False
         self._owner_present = False
@@ -515,13 +530,21 @@ class AIChatRouter:
 
         Owner arrivals are handled separately by ``owner_arrived``; this is
         the deterministic short greeting sent to anyone else so the room
-        isn't silent when they join. Uses a simple template instead of the AI
-        generator so it stays free, instant, and free of honorifics.
+        isn't silent when they join. The greeting cycles through
+        ``_GREETING_TEMPLATES`` in order, so arrivals stay varied without
+        randomizing (a fixed rotation is reproducible and easy to test).
+        Uses a simple template instead of the AI generator so it stays free,
+        instant, and free of honorifics.
         """
         clean = " ".join((name or "").split()).strip()
         if not clean or self._owner_lock:
             return False
-        reply = f"Halo, {clean}!"
+        with self._lock:
+            template = _GREETING_TEMPLATES[
+                self._greeting_index % len(_GREETING_TEMPLATES)
+            ]
+            self._greeting_index += 1
+        reply = template.format(name=clean)
         reply = reply[: self._max_reply_chars].rstrip()
         try:
             self._send_chat(reply)
