@@ -1,0 +1,20 @@
+{
+  "class_name": "Mage",
+  "aliases": ["Mage"],
+  "source": "Skua 1.4.4 AdvancedSkills.json Base rotation",
+  "notes": "Starter Mage fast farming. Slot 3 is kept out of the fast loop because its wire data may be self/friendly; live sAct decides actual targeting.",
+  "modes": {
+    "farm_fast": {
+      "skills": [4, 2, 1, 3],
+      "fallback": "aa",
+      "skill_use_mode": "WaitForCooldown",
+      "skill_timeout_ms": 100
+    },
+    "base": {
+      "skills": [4, 2, 1, 3],
+      "fallback": "aa",
+      "skill_use_mode": "WaitForCooldown",
+      "skill_timeout_ms": 100
+    }
+  }
+}

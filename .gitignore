@@ -1,0 +1,13 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+*.log
+.map_cache/
+last_packet.txt
+nul
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/

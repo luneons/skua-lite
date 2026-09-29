@@ -1,0 +1,1 @@
+{"schema_version":1,"kind":"synthetic-sanitized","self_username":"alice","self_user_id":1,"events":"events.jsonl","expected":"expected_area.json","notes":"Synthetic fixture only; no account token, credential, chat, or real player identity."}
