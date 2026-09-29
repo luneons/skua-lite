@@ -35,9 +35,17 @@ selalu meminta pilihan:
         -> login, join private lair-100000, karakter tetap ACTIVE
         -> menu farming: join, move, drop, rest, booster, aggro,
            quest turn-in, sell, bank, auto-attack Mage, combat capture
+        -> tujuan agentic: `auto farming <monster>` atau `.auto farming <monster>`
+           menjalankan loop observe -> decide -> act sampai `Berhenti`
 
 Mode dapat dipilih noninteraktif memakai `--mode assistant` atau
 `--mode farming`. Opsi `--map` mengoverride map default mode tersebut.
+
+Auto-goal saat ini hanya mengeksekusi tujuan `farming <monster>` yang bisa
+dibuktikan dari snapshot monster/cell server. Bentuk `cari <item> xN dari
+<monster>` dan `selesaikan quest <id>` sudah diparse, tetapi runtime menolaknya
+sampai pelacak inventory/progres quest tersedia; bot tidak berpura-pura sukses
+atau farming tanpa batas dari state yang tidak dapat diamati.
 
 Auto-attack awal tersedia untuk profil **Mage / farming cepat / Water
 Draconian**. Engine membaca `moveToArea`, `updateClass`/inventory, `sAct`,
@@ -346,7 +354,9 @@ Master/Tuan); pemilik disapa via sapaan AI saat lock aktif.
 
 ReloginWatcher memantau state bot tiap 5 detik. Bila koneksi terputus
 (DISCONNECTED_BY_SERVER), bot login ulang memakai kredensial tersimpan dan
-otomatis join kembali ke map yang sama.
+otomatis join kembali ke map aktif terakhir. Retry memakai exponential backoff
+terbatas (default 5 kali; 2, 4, 8, 16, 32 detik) supaya tidak menghajar server
+tanpa henti. Setelah tersambung, target follow dan auto-goal aktif dipulihkan.
 
 ## Roadmap berikutnya
 
