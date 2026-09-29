@@ -18,6 +18,8 @@ import sys
 import time
 from typing import Any
 
+from .auto_planner import AutoGoalParser
+
 
 SW_HIDE = 0
 SW_MINIMIZE = 6
@@ -222,6 +224,12 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         return goal
     if norm.rstrip(".!?") in {"berhenti", "berhenti lawan", "stop", "attack off"}:
         return "goal", "stop"
+    # Autonomous goals are a closed shape too: `auto cari X x5 dari Y`,
+    # `auto farming Y`, `auto selesaikan quest 2260`. A sentence that matches
+    # the `auto` prefix but no known goal shape is refused (never guessed).
+    if norm.startswith("auto ") or norm in {"auto", ".auto"}:
+        goal = AutoGoalParser.parse(text)
+        return ("auto", goal) if goal is not None else ("auto", "")
     if text.startswith("."):
         rest = text[1:].strip()
     elif text.lower() == "farm" or text.lower().startswith("farm "):
@@ -239,7 +247,7 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
     known = {
         "status", "st", "join", "move", "drop", "rest", "booster", "aggro",
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
-        "capture", "chat", "goal", "area", "class",
+        "capture", "chat", "goal", "area", "class", "auto"
     }
     if action not in known:
         return "", ""
@@ -356,6 +364,29 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
             if value not in {"on", "off", "1", "0"}:
                 raise ValueError("format: .capture on|off")
             runtime.set_combat_capture(value in {"on", "1"})
+        elif action == "auto":
+            planner = getattr(bot, "auto_planner", None)
+            if planner is None:
+                print("[WARN] auto_planner tidak tersedia di mode ini.")
+                return None
+            if arg == "":
+                # Empty means: garbage auto command like "auto" alone.
+                print("[WARN] tujuan auto tidak dikenal. Contoh: auto cari Bone x5 dari Skeleton")
+                return None
+            if arg in ("stop", "berhenti"):
+                planner.stop()
+                print("[AUTO] tujuan dihentikan.")
+            elif arg == "status":
+                print(f"[AUTO] {planner.status()}")
+            else:
+                # arg is an AutoGoal parsed by parse_farm_command above
+                from .auto_planner import AutoGoal  # avoid top-level circular
+                if isinstance(arg, AutoGoal):
+                    planner.set_goal(arg)
+                    print(f"[AUTO] {planner.status()}")
+                else:
+                    print("[WARN] tujuan auto tidak dikenal. Contoh: auto cari Bone x5 dari Skeleton")
+                    return None
         else:
             print(f"[WARN] perintah farming '{action}' tidak dikenal.")
             return None

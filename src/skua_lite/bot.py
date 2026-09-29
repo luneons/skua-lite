@@ -466,6 +466,11 @@ class AQWBot:
                 elif follow_cmd == "stop":
                     was_following = self.follow.is_following
                     self.follow.stop()
+                    # `Berhenti` is the owner's single stop word: it must also
+                    # release any autonomous goal, not only follow mode.
+                    planner = getattr(self, "auto_planner", None)
+                    if planner is not None and planner.active:
+                        planner.stop()
                     if was_following:
                         self._return_home_and_afk()
                         self.on_log("[FOLLOW] berhenti; kembali ke lokasi awal + AFK")
@@ -477,6 +482,19 @@ class AQWBot:
                     self.set_afk(False)
                     self.on_log(f"[FOLLOW] mengikuti pemain: {follow_cmd[0]}")
                 return
+
+            # Owner can issue `.auto` goals via chat if farming mode is active
+            if getattr(self, "auto_planner", None) is not None and self._is_active_owner(sender, chat["user_id"]):
+                from .auto_planner import AutoGoalParser
+                auto_goal = AutoGoalParser.parse(msg)
+                if auto_goal is not None:
+                    self.auto_planner.set_goal(auto_goal)
+                    self.on_log(f"[AUTO] tujuan diterima via chat: {self.auto_planner.status()}")
+                    return
+                if msg.strip().casefold() in {"auto stop", ".auto stop", "berhenti"}:
+                    self.auto_planner.stop()
+                    # (Berhenti also stops follow mode above)
+
             if self.ai_router is not None:
                 self.ai_router.note_chat(sender, msg, channel)
                 self.ai_router.handle_message(
@@ -490,10 +508,13 @@ class AQWBot:
         """Authenticate follow commands against the router's active owner.
 
         A known owner UID/name is not enough once owner lock has selected a
-        session; only that active owner may change follow mode.
+        session; only that active owner may change follow mode. When the router
+        is omitted (e.g. farming mode), any hardcoded owner account is accepted.
         """
         if self.ai_router is None:
-            return False
+            from .ai_router import is_owner_account, is_owner_id
+            return is_owner_account(username) or is_owner_id(user_id)
+        
         active_id = getattr(self.ai_router, "active_owner_id", None)
         active_name = getattr(self.ai_router, "active_owner_name", None)
         if active_id is not None:

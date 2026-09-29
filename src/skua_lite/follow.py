@@ -81,6 +81,11 @@ class OwnerFollower:
         with self._lock:
             return self._owner_name
 
+    @property
+    def owner_id(self) -> int | None:
+        with self._lock:
+            return self._owner_id
+
     def start(self, owner_name: str, owner_id: int | None = None) -> None:
         """Begin following one player; resets the last-known snapshot."""
         clean = " ".join((owner_name or "").split())

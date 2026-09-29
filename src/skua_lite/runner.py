@@ -6,10 +6,13 @@ import os
 import sys
 import threading
 import time
+from typing import Any
 
 from . import bot as bot_mod
 from . import cli, config, credentials, farming, login, servers
+from .auto_planner import AutoGoal
 from .mode import RunMode, select_mode
+from .reconnect import ReconnectPolicy
 from .admin_commands import AdminActions, AdminCommandHandler
 from .agent_tools import AgentTools
 from .ai_router import AIChatRouter, AIConfig, openai_chat_generator
@@ -19,31 +22,56 @@ from .research import Researcher, ResearchCache
 class ReloginWatcher(threading.Thread):
     """Pantau state bot; bila koneksi putus, login ulang & join lagi.
 
-    Ini fondasi fitur auto-relogin yang diminta pengguna.
+    Retry dibatasi: ``ReconnectPolicy`` memberi jeda backoff eksponensial dan
+    batas percobaan supaya bot mati dengan rapi kalau server benar-benar down,
+    bukan menghajar login server tanpa henti.
     """
 
-    def __init__(self, orchestrator: "Orchestrator", interval: float = 5.0):
+    def __init__(
+        self,
+        orchestrator: "Orchestrator",
+        interval: float = 5.0,
+        policy: ReconnectPolicy | None = None,
+    ):
         super().__init__(name="ReloginWatcher", daemon=True)
         self.orch = orchestrator
         self.interval = interval
+        self.policy = policy or ReconnectPolicy()
         self._stop_event = threading.Event()
 
     def stop(self) -> None:
         self._stop_event.set()
 
     def run(self) -> None:
+        attempts = 0
         while not self._stop_event.is_set():
-            time.sleep(self.interval)
+            # Poll with the base interval; the backoff only applies between
+            # failed reconnect attempts, so a healthy bot is checked promptly.
+            wait = self.policy.delay_for(attempts + 1) if attempts else self.interval
+            if self._stop_event.wait(wait):
+                return
             b = self.orch.bot
             if b is None:
                 continue
-            if b.state == bot_mod.BotState.DISCONNECTED_BY_SERVER:
-                self.orch.log("[RELOGIN] koneksi terputus, mencoba login ulang...")
-                try:
-                    self.orch.restart()
-                    self.orch.log("[RELOGIN] berhasil tersambung kembali.")
-                except Exception as e:
-                    self.orch.log(f"[RELOGIN] gagal: {e} (coba lagi {self.interval}s)")
+            if b.state != bot_mod.BotState.DISCONNECTED_BY_SERVER:
+                attempts = 0
+                continue
+            if not self.policy.should_retry(attempts):
+                self.orch.log(
+                    f"[RELOGIN] menyerah setelah {attempts} percobaan; bot dihentikan."
+                )
+                return
+            attempts += 1
+            self.orch.log(
+                f"[RELOGIN] koneksi terputus, mencoba login ulang "
+                f"(percobaan {attempts}/{self.policy.max_attempts})..."
+            )
+            try:
+                self.orch.restart()
+                self.orch.log("[RELOGIN] berhasil tersambung kembali.")
+                attempts = 0
+            except Exception as e:
+                self.orch.log(f"[RELOGIN] gagal: {e}")
 
 
 class Orchestrator:
@@ -201,15 +229,46 @@ class Orchestrator:
             self.watcher.start()
             self.log("[RELOGIN] Watcher aktif (interval 5s).")
 
+    def _restore_state(self, snap: dict[str, Any]) -> None:
+        """Apply a saved state snapshot to the newly created bot."""
+        if not self.bot:
+            return
+        
+        goal: AutoGoal | None = snap.get("goal")
+        if goal is not None and self.farming:
+            self.farming.auto_planner.set_goal(goal)
+            
+        follow_on: bool = snap.get("follow_on", False)
+        if follow_on:
+            self.bot.follow.start(
+                owner_name=snap.get("follow_name", ""),
+                owner_id=snap.get("follow_id")
+            )
+
     def restart(self) -> None:
         """Relogin & join ulang (dipakai auto-relogin)."""
         u, p = self.store.load()
+        snap = {}
         if self.bot:
             try:
+                # Capture current map to join it instead of the default
+                if self.bot.current_map:
+                    self.target_map = self.bot.current_map
+                
+                # Capture follow state
+                snap["follow_on"] = self.bot.follow.is_following
+                snap["follow_name"] = self.bot.follow.owner_name
+                snap["follow_id"] = self.bot.follow.owner_id
+                
+                # Capture goal
+                if self.farming and self.farming.auto_planner.active:
+                    snap["goal"] = self.farming.auto_planner.current_goal
+
                 self.bot.stop()
             except Exception:
                 pass
         self.connect(u, p)
+        self._restore_state(snap)
 
     def _on_packet(self, pkt: str, outbound: bool) -> None:
         # Keep the most recent server packet for one-shot diagnostics and append

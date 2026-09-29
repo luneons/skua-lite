@@ -10,8 +10,17 @@ from unittest.mock import Mock
 import pytest
 
 from skua_lite import farming, sfs
+from skua_lite.auto_planner import AutoGoal, AutoPlanner
+from skua_lite.combat import MonsterState
 from skua_lite.mode import RunMode
 from tests.test_client import MockSFSServer
+
+
+def _fake_monster(*, cell="", alive=True, monster_id=7):
+    return MonsterState(
+        map_id=7, monster_id=monster_id, name="Skeleton", race="",
+        cell=cell, hp=100 if alive else 0, max_hp=100, state=1 if alive else 0,
+    )
 
 
 @pytest.fixture
@@ -117,6 +126,99 @@ def test_farming_runtime_never_builds_ai_router():
     runtime = farming.FarmingRuntime(bot=bot, profile=farming.FarmProfile())
     assert runtime.ai_router is None
     assert getattr(bot, "ai_router", None) is None
+
+
+def test_farming_runtime_owns_and_ticks_auto_planner():
+    bot = Mock()
+    bot.state.value = "IN_MAP"
+    bot.move_on_join = None
+    bot.room_id = 273
+    runtime = farming.FarmingRuntime(bot=bot)
+
+    planner = bot.auto_planner
+    assert isinstance(planner, AutoPlanner)
+    calls: list[str] = []
+    runtime.attack_auto = lambda: calls.append("attack")
+    runtime.move_to_cell = lambda c, p=None: calls.append(f"move {c}")
+    runtime.complete_quest = lambda q, *args: calls.append(f"turn_in {q}")
+
+    runtime.start()
+    planner.set_goal(AutoGoal(kind="farm", target_name="Skeleton"))
+    runtime.combat.state.monsters = {
+        1: _fake_monster(cell=runtime.combat.state.cell, alive=True)
+    }
+
+    import time
+    deadline = time.monotonic() + 3.0
+    while not calls and time.monotonic() < deadline:
+        time.sleep(0.05)
+    runtime.stop()
+    assert "attack" in calls
+
+
+def test_farming_runtime_wires_auto_planner_actions_to_verified_packets():
+    bot = Mock()
+    bot.state.value = "IN_MAP"
+    bot.move_on_join = None
+    bot.room_id = 273
+    runtime = farming.FarmingRuntime(bot=bot)
+    planner = runtime.auto_planner
+    assert isinstance(planner, AutoPlanner)
+
+    # Stub only the action methods; the planner itself is the real object.
+    calls: list[str] = []
+    runtime.attack_auto = lambda: calls.append("attack")
+    runtime.move_to_cell = lambda c, p=None: calls.append(f"move {c}")
+    runtime.complete_quest = lambda q, *a: calls.append(f"turn_in {q}")
+
+    planner.set_goal(AutoGoal(kind="farm", target_name="Skeleton"))
+
+    # Observe one live enemy in our own cell -> attack.
+    runtime.combat.state.monsters = {
+        1: _fake_monster(cell=runtime.combat.state.cell, alive=True),
+    }
+    runtime.auto_tick()
+    assert calls == ["attack"]
+
+    # Enemy in another cell -> move there, not attack.
+    calls.clear()
+    runtime.combat.state.monsters = {
+        1: _fake_monster(cell="Boss", alive=True),
+    }
+    runtime.auto_tick()
+    assert calls == ["move Boss"]
+
+    # No enemies anywhere -> wait, and emit no packet.
+    calls.clear()
+    runtime.combat.state.monsters = {}
+    runtime.auto_tick()
+    assert calls == []
+
+    # Disconnect pauses instead of firing into a dead socket.
+    calls.clear()
+    bot.state = Mock(value="DISCONNECTED")
+    runtime.auto_tick()
+    assert calls == []
+
+
+def test_farming_runtime_refuses_drop_goal_until_item_tracking_exists():
+    bot = Mock()
+    bot.move_on_join = None
+    bot.room_id = 273
+    runtime = farming.FarmingRuntime(bot=bot)
+    goal = AutoGoal(kind="drop", target_name="Skeleton", drop_name="Bone", quantity=5)
+    with pytest.raises(ValueError):
+        runtime.set_auto_goal(goal)
+
+
+def test_farming_runtime_stop_stops_the_auto_goal():
+    bot = Mock()
+    bot.move_on_join = None
+    runtime = farming.FarmingRuntime(bot=bot)
+    runtime.auto_planner.set_goal(AutoGoal(kind="farm", target_name="Skeleton"))
+    assert runtime.auto_planner.active is True
+    runtime.stop()
+    assert runtime.auto_planner.active is False
 
 
 def test_farming_runtime_rest_pickup_and_quest_use_verified_packets():

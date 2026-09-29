@@ -14,6 +14,7 @@ import threading
 import time
 from typing import Any, Callable
 
+from .auto_planner import AutoDecision, AutoGoal, AutoObservation, AutoPlanner
 from . import combat, sfs
 from .area_state import AreaStateStore
 from .map_cells import MapCellScanner, SWFCellError
@@ -78,6 +79,18 @@ class FarmingRuntime:
         self.bot.move_on_join = None
         if hasattr(self.bot, "afk_on_join"):
             self.bot.afk_on_join = False
+        # Autonomous goal loop — seams are injected so everything is testable
+        # without a live server. count_drop is explicitly a stub (item tracking
+        # needs a live capture first); drop goals are refused in set_auto_goal.
+        self.auto_planner = AutoPlanner(
+            bot=self.bot,
+            on_log=self._on_log,
+            observe=self._observe_auto,
+            apply=self._apply_auto,
+            count_drop=lambda _goal: 0,  # TODO: wire when item tracker lands
+        )
+        # Expose on the bot so the CLI layer can reach it.
+        self.bot.auto_planner = self.auto_planner
 
     @property
     def running(self) -> bool:
@@ -178,6 +191,10 @@ class FarmingRuntime:
         """Mark the farming controller active; combat starts on explicit command."""
         with self._lock:
             self._running = True
+        self._auto_thread = threading.Thread(
+            target=self._auto_loop, name="SkuaAutoPlanner", daemon=True
+        )
+        self._auto_thread.start()
         self._on_log("[FARM] runtime aktif; AI/Admin tidak dimuat")
         self._on_log(
             f"[COMBAT] siap: {self.profile.class_name} -> {self.profile.target_monster}; "
@@ -186,9 +203,94 @@ class FarmingRuntime:
 
     def stop(self) -> None:
         self.combat.stop()
+        self.auto_planner.stop()
         with self._lock:
             self._running = False
         self._on_log("[FARM] runtime dihentikan")
+
+    # ------------------------------------------------------------------
+    # Autonomous goal loop (`.auto <tujuan>`)
+    # ------------------------------------------------------------------
+    def set_auto_goal(self, goal: AutoGoal) -> AutoGoal:
+        """Accept an autonomous goal, refusing shapes the bot cannot observe.
+
+        `drop` goals need a live item counter; without it the goal would look
+        active while looping forever, so it is refused instead of faked.
+        """
+        if goal.kind == "drop":
+            raise ValueError(
+                "tujuan drop belum bisa: bot belum punya pelacak item "
+                "(butuh capture inventory dulu). Pakai '.auto farming <monster>'."
+            )
+        if goal.kind == "quest":
+            raise ValueError(
+                "tujuan quest belum bisa: bot belum melacak progres quest. "
+                "Pakai '.auto farming <monster>'."
+            )
+        return self.auto_planner.set_goal(goal)
+
+    def _observe_auto(self) -> AutoObservation:
+        """Read live server-pushed state; never invents facts."""
+        connected = self._in_map()
+        state = self.combat.state
+        enemies_in_cell = len(state.alive_in_cell()) if connected else 0
+        cells: list[str] = []
+        seen: set[str] = set()
+        if connected:
+            current = (state.cell or "").casefold()
+            for monster in state.monsters.values():
+                cell = (monster.cell or "").strip()
+                if not monster.alive or not cell:
+                    continue
+                key = cell.casefold()
+                if key == current or key in seen:
+                    continue
+                seen.add(key)
+                cells.append(cell)
+        return AutoObservation(
+            connected=connected,
+            enemies_in_cell=enemies_in_cell,
+            cells_with_enemies=tuple(sorted(cells, key=str.casefold)),
+        )
+
+    def _in_map(self) -> bool:
+        state = getattr(self.bot, "state", None)
+        value = getattr(state, "value", state)
+        return str(value) == "IN_MAP"
+
+    def _apply_auto(self, decision: AutoDecision) -> None:
+        """Perform the decided action with verified packets only."""
+        action = decision.action
+        if action == "idle":
+            self.stop_attack()
+        elif action == "attack":
+            self.attack_auto()
+        elif action == "move" and decision.cell:
+            self.move_to_cell(decision.cell)
+        elif action in {"done", "turn_in"}:
+            self.stop_attack()
+            if action == "turn_in" and decision.quest_id:
+                self.complete_quest(decision.quest_id)
+            self._on_log(f"[AUTO] selesai: {decision.reason}")
+        # `wait` and `paused` deliberately emit nothing.
+
+    def auto_tick(self) -> bool:
+        """Run one planner iteration synchronously (also used by tests)."""
+        return self.auto_planner.tick()
+
+    def _auto_loop(self, interval: float = 1.0) -> None:
+        """Pump the planner while the runtime is alive; stop ends it."""
+        import time as _time
+        while True:
+            with self._lock:
+                if not self._running:
+                    return
+            try:
+                self.auto_tick()
+            except Exception as exc:
+                self._on_log(f"[AUTO] loop berhenti: {exc}")
+                return
+            _time.sleep(interval)
 
     def _send(self, packet: bytes, label: str) -> None:
         self.bot._send_raw(packet)
