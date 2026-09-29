@@ -722,6 +722,36 @@ def test_bot_does_not_greet_itself(mock_yorumi):
     send_chat.assert_not_called()
 
 
+def test_bot_does_not_greet_sulcata3_by_name_or_known_id(mock_yorumi):
+    send_chat = Mock()
+    router = AIChatRouter(
+        generator=Mock(return_value="ignored"),
+        send_chat=send_chat,
+    )
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server(
+            name="Yorumi", ip=mock_yorumi.host, port=mock_yorumi.port,
+            online=True, full=False, upgrade_only=False,
+        ),
+        ai_router=router,
+    )
+    b.room_id = 273
+    b._client = Mock()
+
+    # Both stable identifiers are exclusions: name protects against a changed
+    # SmartFox session ID, and ID protects against spelling/casing differences.
+    for uid, name in ((32017, "sulcata3"), (99999, "SULCATA3"), (32017, "other name")):
+        b._handle_server_packet(
+            "<msg t='sys'><body action='uER' r='273'>"
+            f"<u i='{uid}' m='0' s='0' p='2'><n><![CDATA[{name}]]></n>"
+            "<vars></vars></u></body></msg>"
+        )
+
+    send_chat.assert_not_called()
+
+
 def test_live_me_le_uid_23461_auto_enables_owner_lock(mock_yorumi):
     greeting_sent = threading.Event()
     router = AIChatRouter(

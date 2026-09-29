@@ -39,6 +39,16 @@ class BotError(Exception):
 
 CLIENT_VERSION_STRING = "4.372"  # Game.as vParam
 
+# Accounts excluded from the deterministic Yulgar arrival greeting. Match both
+# known SmartFox ID and normalized account name because session IDs can change.
+_GREETING_EXCLUDED_IDS = frozenset({32017})
+_GREETING_EXCLUDED_NAMES = frozenset({"sulcata3"})
+
+
+def _is_greeting_excluded(user_id: int | None, username: str) -> bool:
+    clean = " ".join((username or "").split()).casefold()
+    return user_id in _GREETING_EXCLUDED_IDS or clean in _GREETING_EXCLUDED_NAMES
+
 
 class AQWBot:
     def __init__(
@@ -365,6 +375,7 @@ class AQWBot:
                     and uid not in self._greeted_uids
                     and not is_owner_id(uid)
                     and not is_owner_account(user_enter["username"])
+                    and not _is_greeting_excluded(uid, user_enter["username"])
                     and (
                         self.username is None
                         or user_enter["username"].lower() != self.username.lower()
