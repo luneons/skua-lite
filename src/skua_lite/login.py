@@ -32,14 +32,22 @@ class LoginToken:
     token: str
     success: bool
     message: str = ""
+    level: int = 1
 
     @classmethod
     def from_objlogin(cls, obj_login: dict, fallback_username: str = "") -> "LoginToken":
+        level = 1
+        raw_level = obj_login.get("iLevel", 1)
+        try:
+            level = int(raw_level) if not isinstance(raw_level, bool) else 1
+        except (TypeError, ValueError):
+            level = 1
         return cls(
             username=str(obj_login.get("unm", "") or fallback_username),
             token=str(obj_login.get("sToken", "")),
             success=bool(obj_login.get("bSuccess", 0) == 1),
             message=str(obj_login.get("sMsg", "")),
+            level=level,
         )
 
 
@@ -95,4 +103,5 @@ def aqw_login(username: str, password: str, *, timeout: float = 20.0) -> LoginTo
         token=tok.token,
         success=True,
         message=tok.message,
+        level=tok.level,
     )

@@ -354,6 +354,11 @@ def bank_swap_packet(
     )
 
 
+def accept_quest_packet(room: int, quest_id: int) -> bytes:
+    """Terima quest ke daftar aktif karakter."""
+    return xt_str("zm", "acceptQuest", [int(quest_id)], room)
+
+
 def try_quest_complete_packet(
     room: int,
     quest_id: int,

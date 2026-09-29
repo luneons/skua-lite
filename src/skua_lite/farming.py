@@ -17,8 +17,21 @@ from typing import Any, Callable
 from .auto_planner import AutoDecision, AutoGoal, AutoObservation, AutoPlanner
 from . import combat, sfs
 from .area_state import AreaStateStore
+from .bot import BotError
 from .inventory import ItemCatalog, OwnedItem
 from .map_cells import MapCellScanner, SWFCellError
+
+
+@dataclass(slots=True)
+class LevelSpot:
+    """One farm location from Skua's `CoreFarms.Experience` progression."""
+
+    map_name: str
+    cell: str
+    pad: str
+    target: str = "*"
+    quests: tuple[int, ...] = ()
+
 
 
 class FarmingUnsupported(RuntimeError):
@@ -62,6 +75,11 @@ class FarmingRuntime:
         self._scanned_map = ""
         self._scan_thread: threading.Thread | None = None
         self._observed_class = ""
+        self._leveling_target = 0
+        self._leveling_stop = threading.Event()
+        self._leveling_thread: threading.Thread | None = None
+        self._leveling_quests: set[int] = set()
+        self._leveling_spot: tuple[str, str] | None = None
         # Full item picture (inventory + bank, every type), separate from the
         # class-only view combat keeps for its profile.
         self.item_catalog = ItemCatalog()
@@ -573,6 +591,133 @@ class FarmingRuntime:
                 break
             time.sleep(0.05)
         return self.item_report("")
+
+    @staticmethod
+    def _level_bracket(level: int) -> LevelSpot | None:
+        """Map character level to the Skua `CoreFarms.Experience` spot."""
+        lvl = int(level)
+        if lvl >= 100:
+            return None
+        if lvl < 10:
+            return LevelSpot("oaklore", "r3", "Left",
+                             target="Bone Berserker", quests=(4007, 6257))
+        if lvl < 20:
+            return LevelSpot("swordhavenundead", "Gates", "Left",
+                             target="Undead Giant", quests=(178,))
+        if lvl < 25:
+            return LevelSpot("icestormarena", "r7", "Left", quests=(6628,))
+        if lvl < 30:
+            return LevelSpot("icestormarena", "r10", "Left", quests=(6628,))
+        if lvl < 35:
+            return LevelSpot("icestormarena", "r11", "Left", quests=(6629,))
+        if lvl < 50:
+            return LevelSpot("icestormarena", "r14", "Left", quests=(6629,))
+        if lvl < 61:
+            return LevelSpot("icestormarena", "r16", "Left", quests=(6629,))
+        if lvl < 75:
+            return LevelSpot("battlegrounde", "r2", "center",
+                             quests=(3991, 3992))
+        return LevelSpot("icestormunder", "r2", "Top", quests=())
+
+    def auto_level_spot(self) -> LevelSpot | None:
+        """Spot for the current level, or None once the cap is reached."""
+        return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
+
+    def start_leveling(self, target: int = 100) -> str:
+        """Begin a background auto-level loop toward the target level."""
+        current = int(getattr(self.bot, "level", 1) or 1)
+        goal = max(1, min(100, int(target or 100)))
+        if current >= goal:
+            return f"sudah level {current}; target {goal} tercapai"
+        spot = self._level_bracket(current)
+        self._leveling_target = goal
+        if spot is not None:
+            try:
+                self.join(spot.map_name)
+            except FarmingUnsupported:
+                pass
+        self._leveling_stop.clear()
+        thread = threading.Thread(
+            target=self._leveling_loop, name="auto-level", daemon=True
+        )
+        self._leveling_thread = thread
+        thread.start()
+        return f"auto leveling level {current} → {goal}"
+
+    def stop_leveling(self) -> str:
+        """Stop the auto-level loop without touching combat/follow state."""
+        self._leveling_target = 0
+        self._leveling_stop.set()
+        return "auto leveling dihentikan"
+
+    def is_leveling(self) -> bool:
+        thread = self._leveling_thread
+        return thread is not None and thread.is_alive()
+
+    def _leveling_loop(self) -> None:
+        while not self._leveling_stop.is_set():
+            current = int(getattr(self.bot, "level", 1) or 1)
+            goal = int(self._leveling_target or 0)
+            if goal <= 0 or current >= goal:
+                self._leveling_target = 0
+                self.stop_goal()
+                self._on_log(f"[LEVEL] auto leveling selesai di level {current}")
+                return
+            spot = self._level_bracket(current)
+            if spot is None:
+                return
+
+            # Navigate. A transient join failure must not kill the loop; the
+            # bracket is re-evaluated next tick.
+            raw_map = (self.bot.current_map or "").split("-")[0].lower()
+            target_map = spot.map_name.lower()
+            if raw_map != target_map:
+                try:
+                    # Skua private instance usually ends in -100000,
+                    # but we use 100000 for standard private routing
+                    self.join(f"{target_map}-100000")
+                except (FarmingUnsupported, BotError):
+                    time.sleep(2.0)
+                    continue
+                # wait map load
+                time.sleep(4.0)
+
+            # Move cell if needed
+            combat_state = self.combat.state
+            if combat_state.cell != spot.cell and combat_state.map_file_name:
+                try:
+                    self.move_to_cell(spot.cell, spot.pad)
+                    time.sleep(1.5)
+                except Exception:
+                    pass
+
+            # Only accept quests once per spot; re-sending every tick spams
+            # the server and can drop the quest from the active list.
+            spot_key = (spot.map_name, spot.cell)
+            if spot_key != self._leveling_spot:
+                self._leveling_spot = spot_key
+                self._leveling_quests.clear()
+            for q in spot.quests:
+                if q not in self._leveling_quests:
+                    self._leveling_quests.add(q)
+                    self._send(sfs.accept_quest_packet(self.bot.room_id, q),
+                               f"accept quest {q}")
+
+            # Start fighting
+            if not self.combat.running:
+                # If target is specific (like Undead Giant), set it;
+                # else clear map.
+                if spot.target and spot.target != "*":
+                    self.attack(spot.target)
+                else:
+                    self.fight_all_in_map()
+
+            # Quest turn-in is cheap and server-judged, so it repeats.
+            for q in spot.quests:
+                self._send(sfs.try_quest_complete_packet(self.bot.room_id, q, -1),
+                           f"complete quest {q}")
+
+            time.sleep(3.0)
 
     def scan_classes(self, timeout: float = 8.0) -> list[str]:
         """Request inventory+bank, then keep packets the main loop feeds us."""

@@ -248,7 +248,7 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         "status", "st", "join", "move", "drop", "rest", "booster", "aggro",
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
         "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
-        "weapon", "armor", "helm", "cape",
+        "weapon", "armor", "helm", "cape", "level",
     }
     if action not in known:
         return "", ""
@@ -442,6 +442,15 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
                 _print_menu("Item", rows, ".equip <nomor> atau .equip <nama item>")
             else:
                 raise ValueError("format: .item scan | list | type <tipe>")
+        elif action == "level":
+            target = arg.strip()
+            if target in ("stop", "off", "berhenti"):
+                print(f"[LEVEL] {runtime.stop_leveling()}")
+            else:
+                goal = 100
+                if target and target.isdigit():
+                    goal = int(target)
+                print(f"[LEVEL] {runtime.start_leveling(goal)}")
         elif action == "equip":
             if not arg.strip():
                 raise ValueError("format: .equip <nomor|nama item>")

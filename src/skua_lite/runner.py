@@ -205,6 +205,7 @@ class Orchestrator:
             on_log=self.log,
             on_packet=self._on_packet,
             ai_router=ai_router,
+            level=tok.level,
         )
         b.orchestrator = self
         if self.mode is RunMode.FARMING:

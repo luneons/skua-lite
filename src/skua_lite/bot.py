@@ -64,6 +64,7 @@ class AQWBot:
         on_log: Callable[[str], None] | None = None,
         on_packet: Callable[[str, bool], None] | None = None,  # (pkt, outbound)
         ai_router: object | None = None,
+        level: int = 1,
     ):
         self.username = username.lower()
         self.token = token
@@ -83,6 +84,7 @@ class AQWBot:
         self.room_id: int = 1
         self.session_user_id: int | None = None
         self.is_afk: bool = False
+        self.level: int = max(1, int(level or 1))
         # Players seen in the latest area snapshot (`moveToArea.uoBranch`),
         # keyed by lowercase username -> (cell, pad, intState). Tracked for
         # area diagnostics and `/goto` local routing (see `World.goto`).
@@ -194,6 +196,7 @@ class AQWBot:
             self._set_state(BotState.DISCONNECTED)
             raise BotError("login ditolak server")
         self.session_user_id = sfs.parse_login_user_id(login_resp)
+        self._track_character_level(login_resp)
 
         self._set_state(BotState.LOGGED_IN)
 
@@ -349,10 +352,36 @@ class AQWBot:
         if self.state not in (BotState.STOPPED, BotState.DISCONNECTED_BY_SERVER):
             self._set_state(BotState.STOPPED)
 
+    def _track_character_level(self, pkt: str) -> None:
+        """Learn the character level from a login response packet."""
+        parsed = sfs.parse_xt_json(pkt)
+        if not parsed:
+            return
+        obj = parsed.get("obj") or {}
+        candidates = [obj.get("login"), obj]
+        for source in candidates:
+            if not isinstance(source, dict):
+                continue
+            value = source.get("iLevel")
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
+                self.level = int(value)
+                return
+
     def _handle_server_packet(self, pkt: str) -> None:
         if "action='logout'" in pkt or "action='disconn'" in pkt:
             self._set_state(BotState.DISCONNECTED_BY_SERVER)
             return
+
+        if pkt.startswith("%xt%server%"):
+            # AQW sends `%xt%server%-1%level%36%...` or `%xt%server%level%-1%36%...`
+            # When splitting by `%`, parts[0] is empty.
+            # ['', 'xt', 'server', '-1', 'level', '36', ...]
+            parts = pkt.split("%")
+            verbs = [p for p in parts[3:] if p and p != "-1"]
+            if len(verbs) >= 2 and verbs[0] == "level" and verbs[1].isdigit():
+                self.level = int(verbs[1])
 
         area = sfs.parse_xt_json(pkt)
         if area is not None and area.get("cmd") == "moveToArea":
