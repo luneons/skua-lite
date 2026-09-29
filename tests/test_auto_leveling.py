@@ -116,6 +116,61 @@ def test_auto_level_command_wires_to_farming_runtime(capsys):
     assert "level 65" in capsys.readouterr().out
 
 
+def test_orchestrator_connect_propagates_login_level_to_bot(monkeypatch, tmp_path):
+    """Level from the HTTP login must reach the bot — the leveling spot
+    table reads ``bot.level``, so a dropped level pins the bot at level 1."""
+    from skua_lite import bot as bot_mod, runner
+    from skua_lite.mode import RunMode
+    from skua_lite import credentials
+
+    captured: dict = {}
+
+    class _FakeBot:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def start(self):
+            raise AssertionError("stop")
+
+    monkeypatch.setattr(runner.bot_mod, "AQWBot", _FakeBot)
+
+    class _Tok:
+        username = "alice"
+        token = "t"
+        level = 65
+
+    monkeypatch.setattr(runner.login, "aqw_login", lambda *a, **k: _Tok())
+    monkeypatch.setattr(
+        runner.servers, "fetch_server_list",
+        lambda **k: {"Yorumi": runner.servers.Server(
+            "Yorumi", "127.0.0.1", 5588, True, False, False)},
+    )
+
+    orch = runner.Orchestrator(
+        server_name="Yorumi", store=credentials.CredentialStore(base_dir=tmp_path),
+        mode=RunMode.FARMING,
+    )
+
+    # Stop before the TCP handshake: the wiring under test (level=tok.level)
+    # happens at AQWBot construction.
+    with pytest.raises(AssertionError, match="stop"):
+        orch.connect("alice", "pw")
+
+    assert captured["username"] == "alice"
+    assert captured["level"] == 65
+
+    monkeypatch.undo()
+    real_bot = bot_module.AQWBot(
+        username="alice", token="t",
+        server=runner.servers.Server("Yorumi", "127.0.0.1", 5588,
+                                     True, False, False),
+        level=captured["level"],
+    )
+    assert real_bot.level == 65
+    spot = FarmingRuntime(bot=real_bot).auto_level_spot()
+    assert (spot.map_name, spot.cell) == ("battlegrounde", "r2")
+
+
 def test_level_command_defaults_to_auto_and_accepts_target(capsys):
     runtime = Mock()
     runtime.start_leveling.return_value = "auto leveling level 35 → 100"
