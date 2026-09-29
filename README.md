@@ -9,7 +9,20 @@ terpisah: **MODE AI ASISTEN** dan **MODE FARMING**.
 
 ## Dua mode startup
 
-Jalankan `JALANKAN_SKUA_LITE.bat` atau `python -m skua_lite`; sebelum login bot
+Launcher tersedia untuk tiap OS:
+
+- Windows: klik `JALANKAN_SKUA_LITE.bat`.
+- Linux: jalankan `./JALANKAN_SKUA_LITE.sh`.
+- macOS: klik `JALANKAN_SKUA_LITE.command` dari Finder atau jalankan
+  `./JALANKAN_SKUA_LITE.sh` dari Terminal.
+
+Launcher Linux/macOS otomatis mencari Python 3.11+, membuat `.venv`, memasang
+package/dependency bila belum ada, lalu meneruskan semua argumen CLI. Jika file
+hasil unduhan belum executable, jalankan sekali:
+
+    chmod +x JALANKAN_SKUA_LITE.sh JALANKAN_SKUA_LITE.command
+
+Jalankan launcher sesuai OS atau `python -m skua_lite`; sebelum login bot
 selalu meminta pilihan:
 
     [1] MODE AI ASISTEN
@@ -213,13 +226,31 @@ debug, quit.
 
 ## Menjalankan
 
-    cd C:\Users\reswa\projects\skua-lite
-    set PYTHONPATH=src
-    python -m skua_lite
+Windows:
 
-    rem Lewati prompt mode bila dijalankan otomatis:
-    python -m skua_lite --mode assistant --server Yorumi
-    python -m skua_lite --mode farming --server Yorumi --map lair-100000
+    JALANKAN_SKUA_LITE.bat
+
+Linux:
+
+    chmod +x JALANKAN_SKUA_LITE.sh
+    ./JALANKAN_SKUA_LITE.sh
+
+macOS (Terminal atau klik file `.command` di Finder):
+
+    chmod +x JALANKAN_SKUA_LITE.sh JALANKAN_SKUA_LITE.command
+    ./JALANKAN_SKUA_LITE.command
+
+Jalankan mode tertentu tanpa prompt (semua OS meneruskan argumen yang sama):
+
+    ./JALANKAN_SKUA_LITE.sh --mode assistant --server Yorumi
+    ./JALANKAN_SKUA_LITE.sh --mode farming --server Yorumi --map lair-100000
+
+Cara manual tanpa launcher:
+
+    python3 -m venv .venv
+    . .venv/bin/activate
+    python -m pip install -e .
+    python -m skua_lite
 
 ## Test
 

@@ -1,0 +1,4 @@
+# Keep Unix/macOS launchers runnable after a Windows checkout/commit.
+*.sh text eol=lf
+*.command text eol=lf
+*.bat text eol=crlf
