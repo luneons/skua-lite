@@ -27,9 +27,9 @@ def test_class_scan_prints_numbered_choices_and_simple_choose_hint(capsys):
 
     assert cli.dispatch_farm(_orch(runtime), "class", "scan") == "farm"
     output = capsys.readouterr().out
-    assert "[CLASS 1] [1] [dipakai] Mage" in output
-    assert "[CLASS 3] [3] [bank] Echo Shaman" in output
-    assert ".class use <nomor>" in output
+    assert "[CLASS] [1] [dipakai] Mage" in output
+    assert "[CLASS] [3] [bank] Echo Shaman" in output
+    assert ".class <nomor>" in output
 
 
 def test_class_use_number_passes_number_unchanged_to_runtime(capsys):

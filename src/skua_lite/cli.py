@@ -247,7 +247,8 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
     known = {
         "status", "st", "join", "move", "drop", "rest", "booster", "aggro",
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
-        "capture", "chat", "goal", "area", "class", "auto", "item", "equip"
+        "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
+        "weapon", "armor", "helm", "cape",
     }
     if action not in known:
         return "", ""
@@ -299,17 +300,37 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
                 print("[WARN] format: .bank load | in <item_id> <char_item_id> | out <item_id> <char_item_id>")
         elif action == "class":
             parts = arg.split(maxsplit=1)
-            sub = parts[0].lower() if parts else "scan"
+            sub = parts[0].lower() if parts else ""
             value = parts[1].strip() if len(parts) > 1 else ""
-            if sub in {"scan", "list", "ls"}:
-                rows = runtime.scan_classes() if sub == "scan" else runtime.class_report()
-                for index, row in enumerate(rows, 1):
-                    print(f"[CLASS {index}] {row}")
-                print("[CLASS] pilih: .class use <nomor> atau .class use <nama class>")
+            if not sub or sub in {"scan", "list", "ls"}:
+                rows = runtime.scan_classes() if sub != "list" and sub != "ls" else runtime.class_report()
+                for row in rows:
+                    print(f"[CLASS] {row}")
+                print("[CLASS] pilih: .class <nomor> atau .class <nama class>")
             elif sub in {"use", "equip", "pakai"} and value:
                 print(f"[CLASS] {runtime.select_class(value)}")
             else:
-                raise ValueError("format: .class scan | list | use <nama class>")
+                # Short flow: `.class 2` or `.class Legion Revenant`.
+                print(f"[CLASS] {runtime.select_class(arg.strip())}")
+        elif action in {"weapon", "armor", "helm", "cape"}:
+            item_type = {
+                "weapon": "Weapon",
+                "armor": "Armor",
+                "helm": "Helm",
+                "cape": "Cape",
+            }[action]
+            if not arg.strip():
+                for row in runtime.scan_gear(item_type):
+                    print(f"[{action.upper()}] {row}")
+                print(
+                    f"[{action.upper()}] pilih: .{action} <nomor> "
+                    f"atau .{action} <nama item>"
+                )
+            else:
+                print(
+                    f"[{action.upper()}] "
+                    f"{runtime.equip_gear(item_type, arg.strip())}"
+                )
         elif action == "attack":
             if not arg.strip():
                 runtime.attack("")

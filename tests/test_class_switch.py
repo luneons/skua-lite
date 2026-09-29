@@ -341,9 +341,9 @@ def test_dispatch_class_scan_lists_choices(capsys):
 
     assert cli.dispatch_farm(orch, "class", "scan") == "farm"
     output = capsys.readouterr().out
-    assert "[CLASS 1] [dipakai] Mage" in output
-    assert "[CLASS 2] [bank] Echo Shaman" in output
-    assert ".class use <nama class>" in output
+    assert "[CLASS] [dipakai] Mage" in output
+    assert "[CLASS] [bank] Echo Shaman" in output
+    assert ".class <nama class>" in output
 
 
 def test_dispatch_class_use_keeps_names_with_spaces(capsys):

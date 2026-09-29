@@ -433,6 +433,44 @@ class FarmingRuntime:
             )
         return rows
 
+    def gear_report(self, item_type: str) -> list[str]:
+        """Numbered menu for one equipment slot (Weapon/Armor/Helm/Cape)."""
+        return self.item_report(item_type)
+
+    def scan_gear(self, item_type: str, timeout: float = 8.0) -> list[str]:
+        """Fetch inventory+bank once, then list only the requested gear type."""
+        self.scan_items(timeout=timeout)
+        return self.gear_report(item_type)
+
+    def equip_gear(self, item_type: str, token: str) -> str:
+        """Equip by number from that slot's menu or by exact item name."""
+        text = str(token or "").strip()
+        if not text:
+            raise ValueError(f"format: .{item_type.casefold()} <nomor|nama item>")
+        if text.isdigit():
+            match = self.item_catalog.by_type_number(item_type, int(text))
+        else:
+            match = self.item_catalog.find(text)
+            if match is not None and match.item_type.casefold() != item_type.casefold():
+                match = None
+        if match is None:
+            known = ", ".join(
+                item.name for item in self.item_catalog.items_by_type(item_type)
+            )
+            raise ValueError(
+                f"{item_type.casefold()} '{text}' tidak ditemukan "
+                f"(terdeteksi: {known or 'tidak ada'})"
+            )
+        if match.source == "equipped":
+            return f"{match.name} sudah dipakai"
+        if match.source == "bank":
+            self.bank_to_inventory(match.item_id, match.char_item_id)
+        self._send(
+            sfs.equip_item_packet(self.bot.room_id, match.item_id),
+            f"equip {match.name}",
+        )
+        return f"equip {match.name} ({match.item_type})"
+
     def equip_item(self, token: str) -> str:
         """Equip any scanned item by menu number or exact name.
 
