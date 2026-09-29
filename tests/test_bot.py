@@ -67,7 +67,7 @@ def test_bot_runs_full_login_join_afk_flow(mock_yorumi):
 
     time.sleep(0.3)
     assert any("%xt%zm%mv%273%850%302%10%" in p for p in mock_yorumi.received)
-    assert any("%xt%zm%cmd%273%afk%" in p for p in mock_yorumi.received)
+    assert any("%xt%zm%afk%1%true%" in p for p in mock_yorumi.received)
 
     b.chat("halo dari python lite!")
     time.sleep(0.2)
@@ -134,6 +134,55 @@ def test_chat_slash_goto_keeps_spaced_player_name_as_one_argument():
     b.chat("/goto ME LE")
 
     assert sent == ["%xt%zm%cmd%1%goto%me le%"]
+    assert not any("%message%" in packet for packet in sent)
+
+
+def test_chat_slash_afk_toggles_via_extension_not_cmd():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b.room_id = 42
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/afk")
+
+    assert sent == ["%xt%zm%afk%1%true%"]
+
+
+def test_chat_slash_rest_uses_emote_extension_not_cmd():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b.room_id = 42
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/rest")
+
+    assert sent == ["%xt%zm%emotea%1%rest%"]
+
+
+def test_chat_slash_pull_goes_through_cmd_channel():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b.room_id = 42
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/pull ME LE")
+
+    assert sent == ["%xt%zm%cmd%1%pull%me le%"]
     assert not any("%message%" in packet for packet in sent)
 
 

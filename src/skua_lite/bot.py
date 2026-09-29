@@ -72,9 +72,8 @@ class AQWBot:
         self.session_user_id: int | None = None
         self.is_afk: bool = False
         # Players seen in the latest area snapshot (`moveToArea.uoBranch`),
-        # keyed by lowercase username -> (cell, pad). Tracked to prove the
-        # character shares a cell with its scanned targets (`.combat` report);
-        # it does not reroute slash commands, which always go through `cmd`.
+        # keyed by lowercase username -> (cell, pad). Tracked for area
+        # diagnostics and `/goto` local routing (see `World.goto`).
         self._area_players: dict[str, tuple[str, str]] = {}
 
         self._client: client.SFSClient | None = None
@@ -461,6 +460,44 @@ class AQWBot:
         self._send_raw(pkt)
         self.on_log(f"[CHAT SENT] [{channel}]: {clean}")
 
+    # Verbs the official client dispatcher handles in `Chat.submitMsg`.
+    # Each entry maps "how the packet is serialized", not "what it means":
+    #  cmd      -> %xt%zm%cmd%1%<verb>%<args>%
+    #  local    -> handled in Python (join/reload/afk/rest/goto)
+    #  unsupported -> dispatcher exists but the verb is staff/client-only;
+    #                 sending a lookalike packet to production would be a guess,
+    #                 so it is refused instead (skill: keep unverified ops
+    #                 unshippable rather than approximating them).
+    _SLASH_CMD_VERBS = frozenset(
+        {
+            "who", "clear", "bonus", "boost", "frostreset", "queue", "killmap",
+            "item", "combat", "modon", "modoff", "adminyell", "iay",
+            "getbreakdown", "iteratortest", "size", "getroomname", "getinfo",
+            "mod", "pmoff", "pmon", "partyon", "partyoff", "chaton", "chatoff",
+            "friendon", "friendoff", "waron", "waroff", "kickall", "restart",
+            "restartnow", "shutdown", "shutdownnow", "empty", "whitelist",
+            "datadump", "monitor", "resetevents", "resetlogins", "resetgrove",
+            "resettimes", "getlogins", "gettimes", "clock", "event", "tfer",
+            "roomid", "mute", "ban", "ipmute", "kick", "ipkick", "ipunmute",
+            "unmute", "freeze", "unfreeze", "watch", "unwatch", "modban",
+            "reporthack", "repairavatars", "dynamic", "qv",
+        }
+    )
+    _SLASH_LOCAL_VERBS = frozenset(
+        {"join", "reload", "afk", "rest", "goto", "pull", "house"}
+    )
+    _SLASH_UNSUPPORTED_VERBS = frozenset(
+        {
+            "captest", "multi", "cell", "shop", "sound", "ignore", "unignore",
+            "ignoreclear", "report", "reportlang", "debug", "geta", "seta",
+            "queststring", "yuki", "guild", "guildreset", "guildInvite", "gi",
+            "guildremove", "gr", "guildPromote", "gp", "guildDemote", "gd",
+            "motd", "gc", "guildcreate", "renameGuild", "rg", "ginv", "invite",
+            "pi", "ps", "pk", "duel", "friends", "friend", "addquest",
+            "removequest", "forcestart", "forcestop", "fps", "roll",
+        }
+    )
+
     def chat(self, message: str, channel: str = "zone") -> None:
         """Kirim chat, atau eksekusi slash command seperti client AQW."""
         if self.state != BotState.IN_MAP:
@@ -469,11 +506,12 @@ class AQWBot:
         if not clean:
             return
 
-        # Slash command tidak boleh dikirim sebagai bubble chat.
+        # Slash command tidak boleh dikirim sebagai bubble chat. Grammar and
+        # routing follow `Chat.submitMsg` (Chat.as:1318-2163).
         if clean.startswith("/"):
-            parts = clean[1:].split(maxsplit=1)
+            parts = clean[1:].split()
             command = parts[0].lower()
-            argument = parts[1].strip() if len(parts) > 1 else ""
+            argument = " ".join(parts[1:]).strip()
             if command == "join":
                 if not argument:
                     raise BotError("pemakaian: /join <map>, contoh: /join yulgar-14045")
@@ -482,27 +520,78 @@ class AQWBot:
             if command == "goto":
                 if not argument:
                     raise BotError("pemakaian: /goto <nama pemain>")
+                self._goto_player(argument)
+                return
+            if command == "pull":
+                if not argument:
+                    raise BotError("pemakaian: /pull <nama pemain>")
+                # World.pull lower-cases the whole target (World.as:12351).
                 target = " ".join(argument.lower().split())
-                self._send_raw(sfs.goto_player_packet(target, room=1))
-                self.on_log(f"[GOTO] minta server menuju {argument}")
+                self._send_raw(sfs.slash_command_packet("pull", [target], room=1))
+                self.on_log(f"[PULL] minta server menarik {target}")
                 return
             if command == "reload":
                 self.reload()
                 return
             if command == "afk":
-                self.set_afk(True)
+                self.set_afk(not self.is_afk)
                 return
-            # Slash input is game-command syntax, never zone chat. Commands
-            # with special client behavior above use dedicated paths; other
-            # verbs use one joined argument, matching commands such as `/who`.
-            args = [argument] if argument else []
-            self._send_raw(sfs.slash_command_packet(command, args, room=1))
-            self.on_log(f"[CMD] /{command}{(' ' + argument) if argument else ''}")
-            return
+            if command == "rest":
+                self._send_raw(sfs.rest_packet())
+                self.on_log("[REST] mulainya istirahat (emotea rest)")
+                return
+            if command in self._SLASH_CMD_VERBS:
+                # One joined argument, matching `params.slice(1).join(" ")` at
+                # the client call sites for `/who`, `/getinfo`, `/item`, etc.
+                args = [argument] if argument else []
+                self._send_raw(sfs.slash_command_packet(command, args, room=1))
+                self.on_log(f"[CMD] /{command}{(' ' + argument) if argument else ''}")
+                return
+            if command in self._SLASH_LOCAL_VERBS:
+                # Client-side only (`cmd = null` in the dispatcher): the client
+                # acts locally and never emits this verb. Refuse rather than
+                # send a packet the live server has no reason to accept.
+                raise BotError(
+                    f"slash command /{command} hanya berjalan di client, "
+                    "tidak dikirim ke server"
+                )
+            if command in self._SLASH_UNSUPPORTED_VERBS:
+                raise BotError(
+                    f"slash command /{command} belum didukung: butuh hak akses "
+                    "staff atau alur client (cell/shop/guild) yang belum "
+                    "diverifikasi untuk headless"
+                )
+            raise BotError(f"slash command tidak didukung: /{command}")
 
         pkt = sfs.chat_packet(self.room_id, clean, channel=channel)
         self._send_raw(pkt)
         self.on_log(f"[CHAT SENT] [{channel}]: {clean}")
+
+    def _goto_player(self, argument: str) -> None:
+        """`/goto` exactly like ``World.goto`` (World.as:12323-12349).
+
+        The client has two branches: when the target is already in the local
+        area tree it walks to that cell with ``moveToCell`` and never sends
+        ``cmd goto``; only a target outside the area falls back to
+        ``sendXtMessage('zm','cmd',['goto',name],'str',1)``. Always using the
+        ``cmd`` form was why a same-area ``/goto`` looked dead: the server only
+        honors it for a player it must summon, and the client had already moved
+        locally without any packet.
+        """
+        target = " ".join(argument.lower().split())
+        if not target:
+            raise BotError("pemakaian: /goto <nama pemain>")
+        me = self._area_players.get(self.username.lower())
+        other = self._area_players.get(target)
+        if other is not None and me is not None and other[0] != me[0]:
+            cell, pad = other
+            self._send_raw(
+                sfs.move_to_cell_packet(room=self.room_id, cell=cell, pad=pad or "Spawn")
+            )
+            self.on_log(f"[GOTO] pindah ke cell {cell}/{pad or 'Spawn'} ({target})")
+            return
+        self._send_raw(sfs.goto_player_packet(target, room=1))
+        self.on_log(f"[GOTO] minta server menuju {argument}")
 
     def join_map(self, map_name: str) -> None:
         """Pindah ke map/room seperti perintah game ``/join``."""
@@ -523,10 +612,10 @@ class AQWBot:
             raise
 
     def set_afk(self, enable: bool = True) -> None:
-        """Kirim toggle status AFK."""
+        """Kirim toggle status AFK (World.afkToggle pakai channel `afk`)."""
         if self.state != BotState.IN_MAP:
             return
-        pkt = sfs.afk_packet(self.room_id)
+        pkt = sfs.afk_packet(enable=enable)
         self._send_raw(pkt)
         self.is_afk = enable
         self.on_log(f"[AFK] status -> {'AFK' if enable else 'ACTIVE'}")

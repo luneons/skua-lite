@@ -146,9 +146,31 @@ def chat_packet(room: int, message: str, channel: str = "zone") -> bytes:
     return xt_str("zm", "message", [message, channel], room)
 
 
-def afk_packet(room: int) -> bytes:
-    """Paket AFK: ``%xt%zm%cmd%{room}%afk%``."""
-    return xt_str("zm", "cmd", ["afk"], room)
+def afk_packet(enable: bool = True) -> bytes:
+    """Toggle AFK.
+
+    Anchored to ``World.afkToggle``: ``sendXtMessage('zm','afk',[!afk],
+    'str',1)`` — the extension name is ``afk`` and the room is always ``1``,
+    not the ``cmd`` channel and not the area room.
+    """
+    return xt_str("zm", "afk", ["true" if enable else "false"], 1)
+
+
+def emote_packet(emote: str, room: int = 1) -> bytes:
+    """Play an emote exactly like ``World.rest``/``Chat`` emote branch.
+
+    Anchored to ``World.rest`` (``sendXtMessage('zm','emotea',['rest'],
+    'str',1)``) and ``Chat.submitMsg`` (``cmd='emotea'`` with the emote name).
+    """
+    value = str(emote).strip().lower()
+    if not value:
+        raise ValueError("emote tidak boleh kosong")
+    return xt_str("zm", "emotea", [value], room)
+
+
+def rest_request_packet() -> bytes:
+    """Repeat rest while already seated (``World.restRequest``)."""
+    return xt_str("zm", "restRequest", [""], 1)
 
 
 def move_packet(room: int, x: int, y: int, speed: int = 10) -> bytes:
@@ -183,8 +205,13 @@ def get_drop_packet(room: int, drop_id: int) -> bytes:
 
 
 def rest_packet() -> bytes:
-    """Minta pemulihan HP/MP di luar pertarungan."""
-    return xt_str("zm", "restRequest", [""], room=1)
+    """Sit down and start resting (``World.rest`` -> ``emotea rest``).
+
+    The old ``cmd restRequest`` form was wrong: ``rest`` in ``Chat.submitMsg``
+    routes to ``World.rest``, which sends the ``emotea`` extension. Repeat
+    rest while seated uses :func:`rest_request_packet`.
+    """
+    return emote_packet("rest")
 
 
 def res_player_timed_packet(user_id: int, room: int = 1) -> bytes:

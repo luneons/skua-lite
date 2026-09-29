@@ -55,10 +55,10 @@ def test_chat_zone_packet():
     assert body == "%xt%zm%message%1%hello world%zone%"
 
 
-def test_afk_packet():
-    pkt = sfs.afk_packet(room=1)
+def test_afk_packet_uses_afk_extension_channel():
+    pkt = sfs.afk_packet(enable=True)
     body = pkt.rstrip(b"\x00").decode("latin-1")
-    assert body == "%xt%zm%cmd%1%afk%"
+    assert body == "%xt%zm%afk%1%true%"
 
 
 def test_res_player_timed_packet_uses_current_area_room_and_session_uid():
