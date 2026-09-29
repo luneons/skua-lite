@@ -704,6 +704,8 @@ class FarmingRuntime:
             # band's, so retarget the engine before starting it.
             if spot.target and spot.target != "*":
                 self.combat.set_target(spot.target)
+                self.combat.set_map_wide(False)
+                self.combat.set_auto(False)
                 if not self.combat.running:
                     self.combat.start()
             elif not self.combat.running:

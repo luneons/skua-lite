@@ -217,6 +217,43 @@ def test_start_and_stop_leveling_toggle_state_without_joining():
     assert not runtime.is_leveling()
 
 
+def test_leveling_named_target_disables_map_wide_before_combat(monkeypatch):
+    """A preceding `.level` bracket must not retain map-wide movement.
+
+    Map-wide makes the engine choose all monsters and move cells; a named
+    level spot must disable it before fighting Bone Berserker/Undead Giant.
+    """
+    import threading
+    import time
+
+    bot = _bot()
+    bot.level = 7
+    bot.current_map = "oaklore-100000"
+    bot.room_id = 42
+    runtime = FarmingRuntime(bot=bot)
+
+    state = Mock(cell="r3", map_file_name="oaklore.swf")
+    runtime.combat = Mock(state=state, running=True)
+    runtime.combat.map_wide = True
+    runtime._send = Mock()
+
+    old_sleep = time.sleep
+    monkeypatch.setattr(time, "sleep", lambda _s: old_sleep(0.01))
+    runtime._leveling_target = 100
+    runtime._leveling_stop.clear()
+    thread = threading.Thread(target=runtime._leveling_loop)
+    thread.start()
+    deadline = time.monotonic() + 3
+    while runtime.combat.set_target.call_count == 0 and time.monotonic() < deadline:
+        old_sleep(0.02)
+    runtime._leveling_stop.set()
+    thread.join(timeout=2)
+
+    runtime.combat.set_target.assert_called_with("Bone Berserker")
+    runtime.combat.set_map_wide.assert_called_with(False)
+    runtime.combat.set_auto.assert_called_with(False)
+
+
 def test_leveling_loop_retargets_named_monster(monkeypatch):
     import threading
 
