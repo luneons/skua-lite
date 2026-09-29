@@ -54,6 +54,9 @@ class OwnerFollower:
         self._cell: str | None = None
         self._pad: str | None = None
         self._position: tuple[int, int, int] | None = None
+        # A departure may arrive as both `exitArea` and `userGone`; send one
+        # goto per absence so the catching-up request is not doubled.
+        self._departed: bool = False
 
     @property
     def is_following(self) -> bool:
@@ -75,6 +78,7 @@ class OwnerFollower:
             self._cell = None
             self._pad = None
             self._position = None
+            self._departed = False
 
     def stop(self) -> None:
         """Stop mirroring; the tracked owner is forgotten."""
@@ -85,6 +89,7 @@ class OwnerFollower:
             self._cell = None
             self._pad = None
             self._position = None
+            self._departed = False
 
     def matches(self, username: str = "", user_id: int | None = None) -> bool:
         """True when this identity is the owner currently being followed."""
@@ -122,6 +127,10 @@ class OwnerFollower:
                 if (x, y, speed) != self._position:
                     self._position = (x, y, speed)
                     packets.append(sfs.move_packet(int(room), x, y, speed))
+            if packets:
+                # The owner is visible again; the next departure deserves its
+                # own goto request.
+                self._departed = False
         return packets
 
     def packets_for_departure(self) -> list[bytes]:
@@ -129,6 +138,9 @@ class OwnerFollower:
         with self._lock:
             if not self._following or not self._owner_name:
                 return []
+            if self._departed:
+                return []
+            self._departed = True
             return [sfs.goto_player_packet(self._owner_name)]
 
 

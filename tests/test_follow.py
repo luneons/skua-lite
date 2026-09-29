@@ -167,6 +167,36 @@ def test_owner_leaving_room_stops_owner_lock_but_keeps_follow():
     assert "%xt%zm%cmd%1%goto%mele%" in _sent(b)
 
 
+def test_follow_sends_goto_only_once_when_both_departure_signals_arrive():
+    b, _ = _follow_bot()
+    b.ai_router.owner_arrived(21623, "mele")
+    _owner_chat(b, "Ikuti aku")
+    b._client.send.reset_mock()
+
+    b._handle_server_packet(
+        "<msg t='sys'><body action='userGone' r='273'>"
+        "<user id='21623' /></body></msg>"
+    )
+    b._handle_server_packet("%xt%exitArea%-1%21623%mele%")
+
+    gotos = [p for p in _sent(b) if "goto" in p]
+    assert len(gotos) == 1
+
+
+def test_follow_goto_guard_resets_when_owner_returns():
+    b, _ = _follow_bot()
+    b.ai_router.owner_arrived(21623, "mele")
+    _owner_chat(b, "Ikuti aku")
+
+    b._handle_server_packet("%xt%exitArea%-1%21623%mele%")
+    _owner_uotls(b, strFrame="Boss", strPad="Left")
+    b._client.send.reset_mock()
+
+    b._handle_server_packet("%xt%exitArea%-1%21623%mele%")
+    gotos = [p for p in _sent(b) if "goto" in p]
+    assert len(gotos) == 1
+
+
 def test_no_follow_traffic_without_active_mode():
     b, _ = _follow_bot()
     b.ai_router.owner_arrived(21623, "mele")
