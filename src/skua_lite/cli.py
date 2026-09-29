@@ -239,7 +239,7 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
     known = {
         "status", "st", "join", "move", "drop", "rest", "booster", "aggro",
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
-        "capture", "chat", "goal", "area",
+        "capture", "chat", "goal", "area", "class",
     }
     if action not in known:
         return "", ""
@@ -289,6 +289,19 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
                 runtime.bank_from_inventory(int(parts[1]), int(parts[2]))
             else:
                 print("[WARN] format: .bank load | in <item_id> <char_item_id> | out <item_id> <char_item_id>")
+        elif action == "class":
+            parts = arg.split(maxsplit=1)
+            sub = parts[0].lower() if parts else "scan"
+            value = parts[1].strip() if len(parts) > 1 else ""
+            if sub in {"scan", "list", "ls"}:
+                rows = runtime.scan_classes() if sub == "scan" else runtime.class_report()
+                for index, row in enumerate(rows, 1):
+                    print(f"[CLASS {index}] {row}")
+                print("[CLASS] pilih: .class use <nama class>")
+            elif sub in {"use", "equip", "pakai"} and value:
+                print(f"[CLASS] {runtime.select_class(value)}")
+            else:
+                raise ValueError("format: .class scan | list | use <nama class>")
         elif action == "attack":
             if not arg.strip():
                 runtime.attack("")

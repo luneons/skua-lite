@@ -63,8 +63,12 @@ def test_get_drop_packet_wire_format():
     assert _wire(sfs.get_drop_packet(room=273, drop_id=9911)) == "%xt%zm%getDrop%273%9911%"
 
 
-def test_rest_request_packet_wire_format():
-    assert _wire(sfs.rest_packet()) == "%xt%zm%restRequest%1%%"
+def test_rest_packet_sits_down_via_emotea_extension():
+    assert _wire(sfs.rest_packet()) == "%xt%zm%emotea%1%rest%"
+
+
+def test_rest_request_packet_repeats_rest_while_seated():
+    assert _wire(sfs.rest_request_packet()) == "%xt%zm%restRequest%1%%"
 
 
 def test_server_use_item_packet_wire_format():
@@ -128,7 +132,7 @@ def test_farming_runtime_rest_pickup_and_quest_use_verified_packets():
     runtime.use_booster(1234)
     runtime.complete_quest(quest_id=101, reward_id=5, turn_ins="1,2")
 
-    assert "%xt%zm%restRequest%1%%" in sent
+    assert "%xt%zm%emotea%1%rest%" in sent
     assert "%xt%zm%getDrop%273%9911%" in sent
     assert "%xt%zm%serverUseItem%273%+%1234%" in sent
     assert "%xt%zm%tryQuestComplete%273%101%5%false%1,2%wvz%" in sent

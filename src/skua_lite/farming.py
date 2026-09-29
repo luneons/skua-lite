@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import threading
+import time
 from typing import Any, Callable
 
 from . import combat, sfs
@@ -58,6 +59,7 @@ class FarmingRuntime:
         self.cell_scanner = cell_scanner or MapCellScanner()
         self._scanned_map = ""
         self._scan_thread: threading.Thread | None = None
+        self._observed_class = ""
         self.area_state = AreaStateStore(
             self_username=str(getattr(bot, "username", "")),
             self_user_id=getattr(bot, "session_user_id", None),
@@ -83,17 +85,31 @@ class FarmingRuntime:
             return self._running
 
     def _combat_profile(self) -> combat.ClassProfile:
-        if self.profile.class_name.casefold() == "mage":
-            return combat.mage_profile()
-        raise FarmingUnsupported(
-            f"profil class belum tersedia: {self.profile.class_name}"
-        )
+        """Start on Mage defaults; feed_packet re-aims live beyond that."""
+        try:
+            return combat.profile_for(self.profile.class_name)
+        except ValueError:
+            return combat.generic_profile(self.profile.class_name or "Mage")
 
     def feed_packet(self, packet: str, outbound: bool = False) -> None:
         self.combat.feed(packet, outbound=outbound)
         if not outbound:
+            self._sync_class_profile()
             self.area_state.feed(packet)
             self._scan_map_cells_if_changed()
+
+    def _sync_class_profile(self) -> None:
+        """Follow the class the server says is equipped, whatever changed it.
+
+        Tracks the last *observed* class instead of the adopted profile name so
+        an optimistic ``.class use X`` is not reverted by stale state before the
+        server confirms it.
+        """
+        observed = (self.combat.state.class_name or "").strip()
+        if not observed or observed == self._observed_class:
+            return
+        self._observed_class = observed
+        self._adopt_equipped_profile(assume=observed)
 
     def _scan_map_cells_if_changed(self) -> None:
         """Start one non-blocking SWF scan for the map the server named."""
@@ -250,6 +266,103 @@ class FarmingRuntime:
 
     def load_bank(self) -> None:
         self._send(sfs.load_bank_packet(self.bot.room_id), "muat bank")
+
+    def class_report(self) -> list[str]:
+        """List every detected class: equipped, inventory, and bank sources."""
+        rows = []
+        state = self.combat.state
+        for entry in state.owned_classes:
+            marker = {
+                "equipped": "[dipakai]",
+                "inventory": "[inventory]",
+                "bank": "[bank]",
+            }.get(entry.source, f"[{entry.source}]")
+            rows.append(f"{marker} {entry.name} (ItemID {entry.item_id})")
+        if not rows:
+            rows.append(
+                f"belum ada class terdeteksi; jalankan `.class scan` "
+                f"(dipakai sekarang: {state.class_name or '?'})"
+            )
+        return rows
+
+    def scan_classes(self, timeout: float = 8.0) -> list[str]:
+        """Request inventory+bank, then keep packets the main loop feeds us."""
+        state = self.combat.state
+        have_inv = bool(state.owned_classes) or bool(state.class_name)
+        if not have_inv:
+            room = int(getattr(self.bot, "room_id", 1) or 1)
+            uid = int(getattr(self.bot, "session_user_id", 0) or 0)
+            if uid > 0:
+                self._send(
+                    sfs.retrieve_inventory_packet(room, uid), "minta inventory"
+                )
+        if not state.bank_loaded:
+            self.load_bank()
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while time.monotonic() < deadline:
+            with self._lock:
+                have_inv = bool(state.owned_classes) or bool(state.class_name)
+                if have_inv and state.bank_loaded:
+                    break
+            time.sleep(0.05)
+        return self.class_report()
+
+    def select_class(self, class_name: str) -> str:
+        """Equip a detected class: bankToInv first when it lives in the bank."""
+        wanted = str(class_name or "").strip().casefold()
+        if not wanted:
+            raise ValueError("format: .class use <nama class>")
+        state = self.combat.state
+        match: combat.OwnedClass | None = None
+        for entry in state.owned_classes:
+            if entry.name.casefold() != wanted:
+                continue
+            if match is None or entry.source == "equipped":
+                match = entry
+            if entry.source == "equipped":
+                break
+        if match is None:
+            self.scan_classes(timeout=6.0)
+            for entry in state.owned_classes:
+                if entry.name.casefold() != wanted:
+                    continue
+                if match is None or entry.source == "equipped":
+                    match = entry
+                if entry.source == "equipped":
+                    break
+        if match is None:
+            known = ", ".join(entry.name for entry in state.owned_classes)
+            raise ValueError(
+                f"class '{class_name.strip()}' tidak terdeteksi "
+                f"(terdeteksi: {known or 'tidak ada'})"
+            )
+        if match.source == "equipped":
+            self._adopt_equipped_profile()
+            return f"{match.name} sudah dipakai"
+        if match.source == "bank":
+            self.bank_to_inventory(match.item_id, match.char_item_id)
+        self._send(
+            sfs.equip_item_packet(self.bot.room_id, match.item_id),
+            f"equip class {match.name}",
+        )
+        self._adopt_equipped_profile(assume=match.name)
+        where = "bank" if match.source == "bank" else "inventory"
+        return f"equip {match.name} dari {where}; tunggu sAct live untuk skill"
+
+    def _adopt_equipped_profile(self, assume: str = "") -> None:
+        # An explicit equip request is authoritative until the server confirms:
+        # the old class_name stays cached until the next loadInventoryBig.
+        target = (
+            assume.strip()
+            or (self.combat.state.class_name or "").strip()
+            or self.profile.class_name
+        )
+        try:
+            profile = combat.profile_for(target)
+        except ValueError:
+            profile = combat.generic_profile(target)
+        self.combat.set_class_profile(profile)
+        self.profile.class_name = profile.class_name
 
     def bank_to_inventory(self, item_id: int, char_item_id: int) -> None:
         self._send(

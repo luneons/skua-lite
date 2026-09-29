@@ -137,6 +137,35 @@ def test_chat_slash_goto_keeps_spaced_player_name_as_one_argument():
     assert not any("%message%" in packet for packet in sent)
 
 
+def test_chat_slash_goto_remote_player_falls_back_to_cmd_goto():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b.room_id = 42
+    b.note_area_players(
+        {
+            "uoBranch": [
+                {
+                    "uoName": "myuser",
+                    "strFrame": "Enter",
+                    "strPad": "Spawn",
+                    "intState": 1,
+                },
+            ]
+        }
+    )
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/goto Jauh")
+
+    assert sent == ["%xt%zm%cmd%1%goto%jauh%"]
+    assert not any("%message%" in packet for packet in sent)
+
+
 def test_chat_slash_afk_toggles_via_extension_not_cmd():
     sent: list[str] = []
     b = bot.AQWBot(
@@ -195,15 +224,241 @@ def test_chat_slash_goto_local_player_moves_to_scanned_cell_instead_of_cmd():
     )
     b.state = bot.BotState.IN_MAP
     b.room_id = 42
-    b._area_players = {
-        "myuser": ("Enter", "Spawn"),
-        "mele": ("Boss", "Left"),
-    }
+    b.note_area_players(
+        {
+            "uoBranch": [
+                {
+                    "uoName": "myuser",
+                    "strFrame": "Enter",
+                    "strPad": "Spawn",
+                    "intState": 1,
+                },
+                {
+                    "uoName": "MELE",
+                    "strFrame": "Boss",
+                    "strPad": "Left",
+                    "intState": 1,
+                },
+            ]
+        }
+    )
     b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
 
     b.chat("/goto MELE")
 
     assert sent == ["%xt%zm%moveToCell%42%Boss%Left%"]
+
+
+def test_chat_slash_house_uses_house_extension():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="MyUser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/house ME LE")
+
+    assert sent == ["%xt%zm%house%1%me le%"]
+
+
+def test_chat_slash_invite_uses_party_extension():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/invite ME LE")
+
+    assert sent == ["%xt%zm%gp%1%pi%ME LE%"]
+
+
+def test_chat_slash_friend_uses_request_friend_extension():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/friend ME LE")
+
+    assert sent == ["%xt%zm%requestFriend%1%ME LE%"]
+
+
+def test_chat_slash_guild_invite_uses_guild_extension():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/gi ME LE")
+
+    assert sent == ["%xt%zm%guild%1%gi%ME LE%"]
+
+
+def test_chat_slash_emote_uses_emotea_extension():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b.room_id = 42
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/dance")
+
+    assert sent == ["%xt%zm%emotea%1%dance%"]
+
+
+def test_chat_slash_lol_emote_maps_to_laugh_like_the_client():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/lol")
+
+    assert sent == ["%xt%zm%emotea%1%laugh%"]
+
+def test_chat_slash_roomid_includes_username_and_room_like_client():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/roomid 14045")
+
+    assert sent == ["%xt%zm%cmd%1%roomID%myuser%14045%"]
+
+
+def test_chat_slash_item_passes_three_words_through():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/item cape evil hero")
+
+    assert sent == ["%xt%zm%cmd%1%item%cape%evil%hero%"]
+
+
+def test_chat_slash_item_without_arguments_is_refused():
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    try:
+        b.chat("/item")
+    except bot.BotError:
+        pass
+    else:
+        raise AssertionError("missing /item argument must be refused")
+
+
+def test_chat_slash_addrep_passes_two_through_when_guarded():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/addrep evil 1000")
+
+    assert sent == ["%xt%zm%cmd%1%addrep%evil%1000%"]
+
+
+def test_chat_slash_staff_moderation_verb_is_refused():
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    for verb in ("/mute mele", "/ban mele", "/kick mele"):
+        try:
+            b.chat(verb)
+        except bot.BotError:
+            pass
+        else:
+            raise AssertionError(f"{verb} must be refused for a farming bot")
+
+
+def test_chat_slash_em_uses_em_channel():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b.room_id = 77
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/me menari di tengah lair")
+
+    assert sent == ["%xt%zm%em%77%menari di tengah lair%event%"]
+
+
+def test_chat_slash_pk_uses_party_extension():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/pk mele")
+
+    assert sent == ["%xt%zm%gp%1%pk%mele%"]
+
+
+def test_chat_slash_duel_uses_duel_extension():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/duel mele")
+
+    assert sent == ["%xt%zm%duel%1%mele%"]
 
 
 def test_chat_unknown_slash_command_is_rejected_and_never_sent():
@@ -688,6 +943,59 @@ def test_owner_retrieve_user_data_forces_owner_lock_and_exit_area_resets(mock_yo
     assert router.owner_lock is False
     assert router.owner_present is False
     assert router.active_owner_id is None
+
+
+def test_join_wait_indexes_players_for_same_area_goto():
+    """A synchronous join must keep the moveToArea player snapshot."""
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+        timeout=0.5,
+    )
+    packet = (
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"moveToArea",'
+        '"areaId":83268,"areaName":"lair-97940","strMapName":"lair",'
+        '"uoBranch":[{"uoName":"myuser","strFrame":"Enter",'
+        '"strPad":"Spawn","intState":1},{"uoName":"mele",'
+        '"strFrame":"Boss","strPad":"Left","intState":1}]}}}'
+    )
+    b._client = Mock()
+    b._client.recv_packet.return_value = packet
+    b._send_raw = Mock()
+
+    assert b._join_map_and_wait("lair-97940") == 83268
+    assert b._area_players == {
+        "myuser": ("Enter", "Spawn", 1),
+        "mele": ("Boss", "Left", 1),
+    }
+    sent: list[str] = []
+    b.state = bot.BotState.IN_MAP
+    b.room_id = 83268
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+    b.chat("/goto mele")
+    assert sent == ["%xt%zm%moveToCell%83268%Boss%Left%"]
+
+
+def test_move_to_area_updates_location_after_remote_goto():
+    """A server-driven goto must update status/actions to the destination room."""
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b.current_map = "yulgar-14045"
+    b.room_id = 273
+
+    b._handle_server_packet(
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"moveToArea",'
+        '"areaId":83268,"areaName":"lair-97940","strMapName":"lair",'
+        '"uoBranch":[]}}}'
+    )
+
+    assert b.current_map == "lair-97940"
+    assert b.room_id == 83268
 
 
 def test_owner_can_release_lock_with_mode_normal():

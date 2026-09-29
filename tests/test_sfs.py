@@ -55,6 +55,26 @@ def test_chat_zone_packet():
     assert body == "%xt%zm%message%1%hello world%zone%"
 
 
+def _wire(packet: bytes) -> str:
+    return packet.rstrip(b"\x00").decode("latin-1")
+
+
+def test_em_packet_matches_chat_em_branch():
+    assert _wire(sfs.em_packet(77, "halo dunia")) == "%xt%zm%em%77%halo dunia%event%"
+
+
+def test_party_kick_packet_matches_world_call_site():
+    assert _wire(sfs.party_kick_packet("mele")) == "%xt%zm%gp%1%pk%mele%"
+
+
+def test_duel_invite_packet_matches_world_call_site():
+    assert _wire(sfs.duel_invite_packet("mele")) == "%xt%zm%duel%1%mele%"
+
+
+def test_emote_packet_matches_world_rest_call_site():
+    assert _wire(sfs.emote_packet("rest")) == "%xt%zm%emotea%1%rest%"
+
+
 def test_afk_packet_uses_afk_extension_channel():
     pkt = sfs.afk_packet(enable=True)
     body = pkt.rstrip(b"\x00").decode("latin-1")

@@ -158,11 +158,14 @@ dikirim apa adanya untuk divalidasi server. Contoh: `.cell Stairs Left`,
 
 `.chat <pesan>` mengirim chat biasa. Bila argumen dimulai `/`, input itu
 diperlakukan sebagai command game, bukan chat: `/join <map>` menjadi
-`%xt%zm%cmd%1%tfer%<user>%<map>%` dan `/goto <nama>` menjadi
-`%xt%zm%cmd%1%goto%<nama>%` (huruf kecil, sesuai client). Nama pemain yang
-mengandung spasi tetap satu argumen, mis. `/goto ME LE` -> `goto%me le%`.
-`/reload` dan `/afk` juga ditangani lokal. Slash-command lain dikirim lewat
-envelope `cmd` room 1, jadi tidak pernah bocor sebagai bubble chat.
+`%xt%zm%cmd%1%tfer%<user>%<map>%`. `/goto <nama>` mengikuti dua jalur
+client asli: bila target ada di snapshot area lokal dan beda cell, bot mengirim
+`moveToCell` ke cell/pad target; bila target tidak ada di area lokal, bot memakai
+`%xt%zm%cmd%1%goto%<nama>%` (huruf kecil). Nama pemain yang mengandung spasi
+tetap satu argumen. `/afk` memakai extension `afk` room 1, `/rest` memakai
+`emotea rest`, dan `/pull`/command `cmd` terverifikasi memakai room 1.
+Slash-command yang hanya bekerja di UI client atau belum didukung ditolak dengan
+error, jadi tidak pernah bocor sebagai bubble chat atau paket tebakan.
 
 `.capture on` menulis event combat
 struktural ke `combat_capture.log` dan tidak menyimpan isi chat. Ejaan lama

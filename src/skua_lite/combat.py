@@ -195,6 +195,47 @@ def mage_profile() -> ClassProfile:
     return ClassProfile.load(path)
 
 
+def generic_profile(class_name: str) -> ClassProfile:
+    """Safe order for an unknown equipped class: strongest slots first.
+
+    Live sAct still decides what fires (cooldown, mana, locked, target kind),
+    so this ordering only sets intent, not behavior.
+    """
+    name = str(class_name or "").strip() or "Unknown"
+    return ClassProfile(
+        class_name=name,
+        aliases=(name,),
+        modes={
+            "base": {"skills": [4, 3, 2, 1], "fallback": "aa"},
+            "farm_fast": {"skills": [4, 3, 2, 1], "fallback": "aa"},
+        },
+    )
+
+
+def profile_for(class_name: str) -> ClassProfile:
+    """File profile when the class has one, else a generic live-sAct profile."""
+    wanted = str(class_name or "").strip().casefold()
+    directory = Path(__file__).with_name("class_profiles")
+    for path in sorted(directory.glob("*.json")):
+        try:
+            candidate = ClassProfile.load(path)
+        except (OSError, ValueError):
+            continue
+        if candidate.matches(wanted):
+            return candidate
+    return generic_profile(class_name)
+
+
+@dataclass(slots=True)
+class OwnedClass:
+    """One Class-category item the scan proved (Skua: sType == Class)."""
+
+    name: str
+    item_id: int
+    char_item_id: int
+    source: str  # "equipped" | "inventory" | "bank"
+
+
 @dataclass(slots=True)
 class CombatState:
     self_username: str
@@ -211,6 +252,8 @@ class CombatState:
     respawn_move: tuple[str, str] | None = None
     skills: dict[str, SkillState] = field(default_factory=dict)
     monsters: dict[int, MonsterState] = field(default_factory=dict)
+    owned_classes: list[OwnedClass] = field(default_factory=list)
+    bank_loaded: bool = False
     _monster_defs: dict[int, dict[str, Any]] = field(default_factory=dict)
     # Players seen alive in the current area snapshot (lowercase username ->
     # (cell, pad)). Mirrors `World.uoTree`, which the client builds from the
@@ -288,6 +331,8 @@ class CombatState:
             self._update_class(obj)
         elif cmd in {"loadInventoryBig", "loadInventory"}:
             self._update_class_from_inventory(obj.get("items"))
+        elif cmd == "loadBank":
+            self._update_class_from_bank(obj.get("items"))
         elif cmd == "sAct":
             actions = obj.get("actions") or {}
             active = actions.get("active", []) if isinstance(actions, dict) else []
@@ -348,20 +393,64 @@ class CombatState:
         self.class_item_id = item_id or self.class_item_id
 
     def _update_class_from_inventory(self, items: Any) -> None:
-        """Learn the equipped class the way Player.CurrentClass does: sType Class + bEquip."""
-        if not isinstance(items, dict):
+        """Cache every inventory class and learn the equipped one from bEquip."""
+        rows = self._class_rows(items)
+        self.owned_classes = [
+            entry for entry in self.owned_classes if entry.source == "bank"
+        ]
+        for raw in rows:
+            equipped = _as_bool(raw.get("bEquip"))
+            entry = OwnedClass(
+                name=str(raw.get("sName") or "").strip(),
+                item_id=_as_int(raw.get("ItemID")),
+                char_item_id=_as_int(raw.get("CharItemID")),
+                source="equipped" if equipped else "inventory",
+            )
+            self._upsert_owned_class(entry)
+            if equipped:
+                self.class_name = entry.name or self.class_name
+                self.class_item_id = entry.item_id or self.class_item_id
+
+    def _update_class_from_bank(self, items: Any) -> None:
+        """Cache Class-category bank rows without touching equipped-class state."""
+        self.bank_loaded = True
+        self.owned_classes = [
+            entry for entry in self.owned_classes if entry.source != "bank"
+        ]
+        for raw in self._class_rows(items):
+            self._upsert_owned_class(OwnedClass(
+                name=str(raw.get("sName") or "").strip(),
+                item_id=_as_int(raw.get("ItemID")),
+                char_item_id=_as_int(raw.get("CharItemID")),
+                source="bank",
+            ))
+
+    @staticmethod
+    def _class_rows(items: Any) -> list[dict[str, Any]]:
+        if isinstance(items, dict):
+            source = items.values()
+        elif isinstance(items, list):
+            source = items
+        else:
+            return []
+        return [
+            raw for raw in source
+            if isinstance(raw, dict)
+            and str(raw.get("sType") or raw.get("Category") or "").casefold() == "class"
+            and str(raw.get("sName") or "").strip()
+            and _as_int(raw.get("ItemID")) > 0
+        ]
+
+    def _upsert_owned_class(self, entry: OwnedClass) -> None:
+        """Inventory wins if the same ItemID is echoed by a stale bank payload."""
+        for index, current in enumerate(self.owned_classes):
+            if current.item_id != entry.item_id:
+                continue
+            if current.source != "bank" and entry.source == "bank":
+                return
+            self.owned_classes[index] = entry
             return
-        for raw in items.values():
-            if not isinstance(raw, dict):
-                continue
-            category = str(raw.get("sType") or raw.get("Category") or "")
-            if category.casefold() != "class":
-                continue
-            if not _as_bool(raw.get("bEquip")):
-                continue
-            self.class_name = str(raw.get("sName") or self.class_name).strip()
-            self.class_item_id = _as_int(raw.get("ItemID")) or self.class_item_id
-            return
+        self.owned_classes.append(entry)
 
     def _monster_from(self, raw: dict[str, Any]) -> MonsterState:
         return MonsterState(
@@ -570,6 +659,21 @@ class AutoAttackEngine:
             self.on_log(
                 "[COMBAT] mode auto: menyerang semua monster hidup di cell ini"
             )
+
+    def set_class_profile(self, class_profile: ClassProfile) -> None:
+        """Adopt the profile of a newly equipped class.
+
+        Carried-over skill refs lose their tracked cooldown: ``a4`` on the new
+        class is not the ``a4`` the previous class just fired.
+        """
+        with self._lock:
+            self.class_profile = class_profile
+            for skill in self.state.skills.values():
+                skill.last_used = -1e9
+            self._last_non_auto_action = -1e9
+            self._action_id = 0
+            name = class_profile.class_name
+        self.on_log(f"[COMBAT] profil class -> {name} (skill dari sAct live)")
 
     def set_capture(self, enabled: bool) -> None:
         self._capture = bool(enabled)

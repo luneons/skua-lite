@@ -72,9 +72,9 @@ class AQWBot:
         self.session_user_id: int | None = None
         self.is_afk: bool = False
         # Players seen in the latest area snapshot (`moveToArea.uoBranch`),
-        # keyed by lowercase username -> (cell, pad). Tracked for area
-        # diagnostics and `/goto` local routing (see `World.goto`).
-        self._area_players: dict[str, tuple[str, str]] = {}
+        # keyed by lowercase username -> (cell, pad, intState). Tracked for
+        # area diagnostics and `/goto` local routing (see `World.goto`).
+        self._area_players: dict[str, tuple[str, str, int | None]] = {}
 
         self._client: client.SFSClient | None = None
         self._thread: threading.Thread | None = None
@@ -298,6 +298,9 @@ class AQWBot:
                         break
                     area = sfs.parse_move_to_area(pkt)
                     if area is not None:
+                        parsed = sfs.parse_xt_json(pkt)
+                        if parsed is not None:
+                            self.note_area_players(parsed.get("obj") or {})
                         self.current_map = area[0]
                         return area[1]
                     # warning (inventory loading) -> coba lagi setelah jeda
@@ -342,6 +345,9 @@ class AQWBot:
         area = sfs.parse_xt_json(pkt)
         if area is not None and area.get("cmd") == "moveToArea":
             self.note_area_players(area.get("obj") or {})
+            parsed_area = sfs.parse_move_to_area(pkt)
+            if parsed_area is not None:
+                self.current_map, self.room_id = parsed_area
 
         if self.ai_router is not None:
             user_enter = sfs.parse_user_enter_room(pkt)
@@ -433,11 +439,9 @@ class AQWBot:
         """Index players from a `moveToArea` snapshot for area diagnostics.
 
         Mirrors `World.uoTree`, which the client builds from the same payload:
-        `uoBranch` entries carry `uoName`, `strFrame` and `strPad`. Kept for
-        `.combat` context; slash commands always route through the `cmd`
-        extension channel instead.
+        `uoBranch` entries carry `uoName`, `strFrame` and `strPad`.
         """
-        players: dict[str, tuple[str, str]] = {}
+        players: dict[str, tuple[str, str, int | None]] = {}
         for entry in area_obj.get("uoBranch", []) or []:
             if not isinstance(entry, dict):
                 continue
@@ -446,7 +450,17 @@ class AQWBot:
                 continue
             cell = str(entry.get("strFrame") or "").strip()
             pad = str(entry.get("strPad") or "").strip() or "Spawn"
-            players[name.lower()] = (cell, pad)
+            state: int | None = None
+            for key in ("intState", "intstate", "state"):
+                raw = entry.get(key)
+                if raw is None:
+                    continue
+                try:
+                    state = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                break
+            players[name.lower()] = (cell, pad, state)
         self._area_players = players
 
     def send_plain_chat(self, message: str, channel: str = "zone") -> None:
@@ -483,6 +497,65 @@ class AQWBot:
             "reporthack", "repairavatars", "dynamic", "qv",
         }
     )
+    # Moderation/server verbs the dispatcher accepts but a farming bot must
+    # never emit: each one mutates other players' sessions or the world
+    # (`Chat.as:1782-1985`). Refused before any packet is built.
+    _SLASH_STAFF_VERBS = frozenset(
+        {
+            "mute", "ban", "ipmute", "unmute", "ipunmute", "kick", "ipkick",
+            "freeze", "unfreeze", "watch", "unwatch", "modban", "kickall",
+            "restart", "restartnow", "shutdown", "shutdownnow", "empty",
+            "whitelist", "resetevents", "resetlogins", "resetgrove",
+            "resettimes", "getlogins", "gettimes", "clock", "repairavatars",
+            "adminyell", "iay", "getbreakdown", "iteratortest", "datadump",
+            "monitor", "geta", "seta", "queststring",
+        }
+    )
+
+    # Argument grammar per `cmd` verb, read from `Chat.submitMsg`
+    # (Chat.as:1318-2143): "joined" merges the words into one field
+    # (`params.slice(1).join(" ")`), "split" emits every word as its own
+    # field. The flag marks verbs the client only serializes with an
+    # argument, so a bare verb is refused locally instead of sent as a
+    # half-empty packet.
+    _SLASH_CMD_GRAMMAR: dict[str, tuple[str, bool]] = {
+        "who": ("joined", False),
+        "getinfo": ("joined", True),
+        "item": ("split", True),
+        "combat": ("split", False),
+        "event": ("split", True),
+        "killmap": ("split", True),
+        "getroomname": ("split", True),
+        "modon": ("split", False),
+        "modoff": ("split", False),
+        "queue": ("split", False),
+        "frostreset": ("split", False),
+        "clear": ("split", True),
+        "bonus": ("split", True),
+        "boost": ("split", True),
+        "addrep": ("split", True),
+        "addxp": ("split", True),
+        "addv": ("split", True),
+        "hp": ("split", True),
+        "level": ("split", True),
+        "getevents": ("split", True),
+        "getevent": ("split", True),
+        "mod": ("split", False),
+        "pmoff": ("split", False),
+        "pmon": ("split", False),
+        "partyon": ("split", False),
+        "partyoff": ("split", False),
+        "chaton": ("split", False),
+        "chatoff": ("split", False),
+        "friendon": ("split", False),
+        "friendoff": ("split", False),
+        "waron": ("split", False),
+        "waroff": ("split", False),
+        "roll": ("split", False),
+        "dynamic": ("split", False),
+        "tfer": ("split", True),
+    }
+
     _SLASH_LOCAL_VERBS = frozenset(
         {"join", "reload", "afk", "rest", "goto", "pull", "house"}
     )
@@ -490,13 +563,26 @@ class AQWBot:
         {
             "captest", "multi", "cell", "shop", "sound", "ignore", "unignore",
             "ignoreclear", "report", "reportlang", "debug", "geta", "seta",
-            "queststring", "yuki", "guild", "guildreset", "guildInvite", "gi",
+            "queststring", "yuki", "guild", "guildreset",
             "guildremove", "gr", "guildPromote", "gp", "guildDemote", "gd",
-            "motd", "gc", "guildcreate", "renameGuild", "rg", "ginv", "invite",
-            "pi", "ps", "pk", "duel", "friends", "friend", "addquest",
+            "motd", "gc", "guildcreate", "renameGuild", "rg", "ginv",
+            "pi", "pk", "duel", "friends", "addquest",
             "removequest", "forcestart", "forcestop", "fps", "roll",
         }
     )
+
+    _SLASH_EMOTE_VERBS = frozenset(
+        {
+            "dance", "laugh", "lol", "point", "use", "fart", "backflip", "sleep",
+            "jump", "punt", "dance2", "swordplay", "feign", "wave", "bow", "cry",
+            "unsheath", "cheer", "stern", "salute", "airguitar", "facepalm",
+            "samba", "danceweapon", "useweapon", "powerup", "kneel", "jumpcheer",
+            "salute2", "cry2", "spar", "stepdance", "headbang", "dazed",
+        }
+    )
+    # Client-side rename: Chat.submitMsg maps `lol` onto the `laugh` animation
+    # before serializing (Chat.as:2117-2120).
+    _EMOTE_ALIASES = {"lol": "laugh"}
 
     def chat(self, message: str, channel: str = "zone") -> None:
         """Kirim chat, atau eksekusi slash command seperti client AQW."""
@@ -540,10 +626,95 @@ class AQWBot:
                 self._send_raw(sfs.rest_packet())
                 self.on_log("[REST] mulainya istirahat (emotea rest)")
                 return
-            if command in self._SLASH_CMD_VERBS:
-                # One joined argument, matching `params.slice(1).join(" ")` at
-                # the client call sites for `/who`, `/getinfo`, `/item`, etc.
-                args = [argument] if argument else []
+            if command == "house":
+                # `World.gotoHouse` — own house when no argument is given.
+                target = argument or self.username
+                self._send_raw(sfs.house_packet(target, room=1))
+                self.on_log(f"[HOUSE] masuk rumah {target}")
+                return
+            if command == "invite":
+                if not argument:
+                    raise BotError("pemakaian: /invite <nama pemain>")
+                self._send_raw(sfs.party_invite_packet(argument, room=1))
+                self.on_log(f"[PARTY] undang {argument}")
+                return
+            if command == "ps":
+                if not argument:
+                    raise BotError("pemakaian: /ps <nama pemain>")
+                self._send_raw(sfs.party_summon_packet(argument, room=1))
+                self.on_log(f"[PARTY] summon {argument}")
+                return
+            if command == "friend":
+                if not argument:
+                    raise BotError("pemakaian: /friend <nama pemain>")
+                self._send_raw(sfs.friend_request_packet(argument, room=1))
+                self.on_log(f"[FRIEND] minta pertemanan {argument}")
+                return
+            if command in {"e", "me", "em"}:
+                # Third-person emote (Chat.as:2018-2033): emotes go to the
+                # `em` channel with the current room, not `message`.
+                if not argument:
+                    raise BotError(f"pemakaian: /{command} <teks emote>")
+                self._send_raw(sfs.em_packet(self.room_id, argument))
+                self.on_log(f"[EMOTE] {argument}")
+                return
+            if command in {"pk", "partykick"}:
+                if not argument:
+                    raise BotError("pemakaian: /pk <nama pemain>")
+                self._send_raw(sfs.party_kick_packet(argument, room=1))
+                self.on_log(f"[PARTY] kick {argument}")
+                return
+            if command == "duel":
+                if not argument:
+                    raise BotError("pemakaian: /duel <nama pemain>")
+                self._send_raw(sfs.duel_invite_packet(argument, room=1))
+                self.on_log(f"[DUEL] tantang {argument}")
+                return
+            if command in {"gi", "guildInvite"}:
+                if not argument:
+                    raise BotError("pemakaian: /gi <nama pemain>")
+                self._send_raw(sfs.guild_invite_packet(argument, room=1))
+                self.on_log(f"[GUILD] undang {argument}")
+                return
+            if command in self._SLASH_EMOTE_VERBS:
+                # Chat.as emote branch: cmd becomes the `emotea` extension and
+                # only the emote name is serialized (Chat.as:2114-2122, 2152-2156).
+                emote = self._EMOTE_ALIASES.get(command, command)
+                self._send_raw(sfs.emote_packet(emote, room=1))
+                self.on_log(f"[EMOTE] {emote}")
+                return
+            if command in self._SLASH_STAFF_VERBS:
+                # Dispatcher-only room for staff and moderators; a farming bot
+                # has no business emitting these (`Chat.as:1841-1985`).
+                raise BotError(
+                    f"slash command /{command} ditolak: verb moderasi/staff, "
+                    "tidak pernah dikirim oleh bot farming"
+                )
+            if command == "roomid":
+                # The client pushes `roomID`, its own username, then the room
+                # argument (`Chat.as:1803-1808`); the old code sent only the
+                # argument, so the server never saw the parameter it expected.
+                if not argument:
+                    raise BotError("pemakaian: /roomid <id room>")
+                args = ["roomID", self.username, *argument.split()]
+                # Built directly: the client emits the literal camelCase
+                # `roomID` (Chat.as:1805), which the generic builder lowercases.
+                self._send_raw(sfs.xt_str("zm", "cmd", args, 1))
+                self.on_log(f"[CMD] /roomid {argument}")
+                return
+            if command in self._SLASH_CMD_GRAMMAR:
+                # Shape the packet exactly as `Chat.submitMsg` does per verb:
+                # some verbs join the words into one field, others emit each
+                # word separately, and a few need at least one argument
+                # (Chat.as:1318-2143).
+                mode, requires_argument = self._SLASH_CMD_GRAMMAR[command]
+                words = argument.split()
+                if requires_argument and not words:
+                    raise BotError(f"pemakaian: /{command} <argumen>")
+                if mode == "joined":
+                    args = [argument] if argument else []
+                else:
+                    args = words
                 self._send_raw(sfs.slash_command_packet(command, args, room=1))
                 self.on_log(f"[CMD] /{command}{(' ' + argument) if argument else ''}")
                 return
@@ -583,8 +754,18 @@ class AQWBot:
             raise BotError("pemakaian: /goto <nama pemain>")
         me = self._area_players.get(self.username.lower())
         other = self._area_players.get(target)
-        if other is not None and me is not None and other[0] != me[0]:
-            cell, pad = other
+        # World.goto only gates on the caller's state; the target may lack a
+        # state while its data is still loading. MoveToCell when we have both
+        # cells and they differ (World.as:12330-12342).
+        if (
+            other is not None
+            and me is not None
+            and (me[2] or 0) == 1
+            and other[0]
+            and me[0]
+            and other[0] != me[0]
+        ):
+            cell, pad = other[0], other[1]
             self._send_raw(
                 sfs.move_to_cell_packet(room=self.room_id, cell=cell, pad=pad or "Spawn")
             )

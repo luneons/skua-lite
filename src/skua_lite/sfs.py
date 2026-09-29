@@ -141,6 +141,35 @@ def move_to_cell_packet(room: int, cell: str, pad: str = "Spawn") -> bytes:
     return xt_str("zm", "moveToCell", [target_cell, target_pad], int(room))
 
 
+def em_packet(room: int, text: str) -> bytes:
+    """Third-person emote (`Chat.submitMsg`: channel ``em``).
+
+    Anchored to `Chat.as:2018-2033`: `cmd='em'`, first field the cleaned
+    text, second field `chn.event.str` (`"event"`), envelope room the
+    current channel room.
+    """
+    body = str(text).strip()
+    if not body:
+        raise ValueError("emote /me tidak boleh kosong")
+    return xt_str("zm", "em", [body, "event"], int(room))
+
+
+def party_kick_packet(username: str, room: int = 1) -> bytes:
+    """Party kick (`World.partyKick`: channel ``gp``, arg ``pk``)."""
+    name = str(username).strip()
+    if not name:
+        raise ValueError("username party kick tidak boleh kosong")
+    return xt_str("zm", "gp", ["pk", name], room)
+
+
+def duel_invite_packet(username: str, room: int = 1) -> bytes:
+    """Duel invite (`World.sendDuelInvite`: channel ``duel``)."""
+    name = str(username).strip()
+    if not name:
+        raise ValueError("username duel tidak boleh kosong")
+    return xt_str("zm", "duel", [name], room)
+
+
 def chat_packet(room: int, message: str, channel: str = "zone") -> bytes:
     """Paket chat: ``%xt%zm%message%{room}%{msg}%{channel}%``."""
     return xt_str("zm", "message", [message, channel], room)
@@ -171,6 +200,50 @@ def emote_packet(emote: str, room: int = 1) -> bytes:
 def rest_request_packet() -> bytes:
     """Repeat rest while already seated (``World.restRequest``)."""
     return xt_str("zm", "restRequest", [""], 1)
+
+
+def house_packet(username: str, room: int = 1) -> bytes:
+    """Enter a player's house (`World.gotoHouse`: channel ``house``).
+
+    The client lower-cases the target and sends it on channel ``house`` with
+    room ``1`` — not on ``cmd``.
+    """
+    target = " ".join(str(username).strip().lower().split())
+    if not target:
+        raise ValueError("username house tidak boleh kosong")
+    return xt_str("zm", "house", [target], room)
+
+
+def party_invite_packet(username: str, room: int = 1) -> bytes:
+    """Party invite (`World.partyInvite`: channel ``gp``, arg ``pi``)."""
+    name = str(username).strip()
+    if not name:
+        raise ValueError("username party invite tidak boleh kosong")
+    return xt_str("zm", "gp", ["pi", name], room)
+
+
+def party_summon_packet(username: str, room: int = 1) -> bytes:
+    """Party summon (`World.partySummon`: channel ``gp``, arg ``ps``)."""
+    name = str(username).strip()
+    if not name:
+        raise ValueError("username party summon tidak boleh kosong")
+    return xt_str("zm", "gp", ["ps", name], room)
+
+
+def friend_request_packet(username: str, room: int = 1) -> bytes:
+    """Friend request (`World.requestFriend`: channel ``requestFriend``)."""
+    name = str(username).strip()
+    if not name:
+        raise ValueError("username friend tidak boleh kosong")
+    return xt_str("zm", "requestFriend", [name], room)
+
+
+def guild_invite_packet(username: str, room: int = 1) -> bytes:
+    """Guild invite (`World.guildInvite`: channel ``guild``, arg ``gi``)."""
+    name = str(username).strip()
+    if not name:
+        raise ValueError("username guild invite tidak boleh kosong")
+    return xt_str("zm", "guild", ["gi", name], room)
 
 
 def move_packet(room: int, x: int, y: int, speed: int = 10) -> bytes:
@@ -243,6 +316,16 @@ def sell_item_packet(
 def load_bank_packet(room: int) -> bytes:
     """Minta seluruh isi bank."""
     return xt_str("zm", "loadBank", ["All"], room)
+
+
+def equip_item_packet(room: int, item_id: int) -> bytes:
+    """Minta equip satu item memakai perintah equipItem milik server.
+
+    Skua memfilter inbound logger untuk ``p[2] == "equipItem"``, jadi nama
+    perintah sudah terbukti di wire server; responsnya terverifikasi dari
+    perubahan ``bEquip`` pada inventory berikutnya.
+    """
+    return xt_str("zm", "equipItem", [int(item_id)], room)
 
 
 def bank_to_inventory_packet(room: int, item_id: int, char_item_id: int) -> bytes:
