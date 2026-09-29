@@ -141,6 +141,20 @@ def move_to_cell_packet(room: int, cell: str, pad: str = "Spawn") -> bytes:
     return xt_str("zm", "moveToCell", [target_cell, target_pad], int(room))
 
 
+def parse_move_to_cell(text: str) -> tuple[str, str] | None:
+    """Read back an outbound ``moveToCell`` we just sent.
+
+    AQW never echoes our own cell change, so the packet we send is the only
+    local evidence that the character moved. Returns ``(cell, pad)``.
+    """
+    parts = text.split(MSG_STR)
+    if len(parts) >= 7 and parts[1:3] == ["xt", "zm"] and parts[3] == "moveToCell":
+        cell = parts[5].strip()
+        if cell:
+            return cell, (parts[6].strip() or "Spawn")
+    return None
+
+
 def em_packet(room: int, text: str) -> bytes:
     """Third-person emote (`Chat.submitMsg`: channel ``em``).
 

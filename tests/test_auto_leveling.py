@@ -217,6 +217,19 @@ def test_start_and_stop_leveling_toggle_state_without_joining():
     assert not runtime.is_leveling()
 
 
+def test_outbound_move_to_cell_updates_local_self_state():
+    """AQW does not echo our own moveToCell; outbound feed is the receipt."""
+    runtime = FarmingRuntime(bot=Mock(
+        username="mel e", session_user_id=38215, room_id=42, move_on_join=None
+    ))
+    runtime.combat.state.seen_self = True
+    runtime.combat.state.cell = "Enter"
+
+    runtime.feed_packet("%xt%zm%moveToCell%42%r3%Left%", outbound=True)
+
+    assert runtime.combat.state.cell == "r3"
+
+
 def test_leveling_named_target_disables_map_wide_before_combat(monkeypatch):
     """A preceding `.level` bracket must not retain map-wide movement.
 

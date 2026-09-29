@@ -327,6 +327,15 @@ class CombatState:
     # implicit pad reuses an observed pair instead of a guess.
     _cell_pads: dict[str, str] = field(default_factory=dict)
 
+    def note_outbound_move(self, cell: str, pad: str = "") -> None:
+        """Track a sent moveToCell because AQW does not echo our own move."""
+        target = str(cell or "").strip()
+        if not target:
+            return
+        self.cell = target
+        self.seen_self = True
+        self._note_pad(pad, target)
+
     def feed(self, packet: str) -> None:
         parsed_json = sfs.parse_xt_json(packet)
         if parsed_json is not None:
@@ -756,7 +765,14 @@ class AutoAttackEngine:
 
     def feed(self, packet: str, outbound: bool = False) -> None:
         with self._lock:
-            self.state.feed(packet)
+            if outbound:
+                move = sfs.parse_move_to_cell(
+                    packet.decode("latin-1") if isinstance(packet, bytes) else packet
+                )
+                if move is not None:
+                    self.state.note_outbound_move(*move)
+            else:
+                self.state.feed(packet)
             if not outbound:
                 self._drain_respawn_move()
             if self._capture and self.capture_path is not None and self._capture_worthy(packet):
