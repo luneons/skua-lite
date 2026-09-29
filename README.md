@@ -185,6 +185,30 @@ struktural ke `combat_capture.log` dan tidak menyimpan isi chat. Ejaan lama
 `farm ...` masih diterima sebagai kompatibilitas. Umum tersedia: chat, status,
 debug, quit.
 
+## MCP HTTP/SSE status (opt-in)
+
+Server MCP berbasis stdlib tersedia tanpa mengubah startup bot default. Jalankan
+secara eksplisit (tanpa login AQW); utamakan env var agar token tidak terlihat di
+process list atau shell history:
+
+    export SKUA_MCP_TOKEN='token-random-panjang'
+    python -m skua_lite --mcp-only
+
+`SKUA_MCP_*` hanya berlaku bersama `--mcp-only`; flag CLI dapat mengoverride env.
+Endpoint `GET /sse` dan `POST /messages` wajib memakai header
+`Authorization: Bearer <token>` (nama scheme tidak peka huruf besar-kecil).
+`POST /messages` wajib memakai tepat satu `session_id` hasil event endpoint;
+parameter yang hilang, duplikat, kosong, atau tidak valid ditolak dengan 400.
+MCP JSON-RPC dasar yang didukung adalah `initialize`, `tools/list`, dan
+`tools/call` untuk tool read-only `health`. Tool tersebut hanya mengembalikan
+status server dan tidak menyediakan shell, exec, atau operasi tulis. SSE
+mengirim event endpoint lalu keep-alive, membatasi jumlah sesi aktif dan ukuran
+queue, serta membersihkan sesi idle atau koneksi klien yang putus. Session tidak
+ditemukan menghasilkan 404; batas sesi/queue menghasilkan 503 dengan
+`Retry-After`. HTTP ini plaintext: CLI memperingatkan bind non-loopback; gunakan
+firewall, rotasi token, dan TLS reverse proxy untuk deployment non-loopback.
+Jangan menaruh token di URL atau log.
+
 ## Keamanan kredensial
 
 - Password tidak pernah dicetak ke layar atau log.
