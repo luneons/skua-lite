@@ -332,12 +332,13 @@ class AgentTools:
                     continue
                 if path.suffix in {".pyc", ".pyo"}:
                     continue
-                stat = path.stat()
+                # Hash file content, not size+mtime. On Windows a same-size
+                # rewrite can preserve the old timestamp during a very fast
+                # agent run, making a real edit invisible and the upgrade
+                # falsely report "Tidak ada file yang berubah".
+                digest = hashlib.sha1(path.read_bytes()).hexdigest()
             except OSError:
                 continue
-            digest = hashlib.sha1(
-                f"{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")
-            ).hexdigest()
             result[str(path.relative_to(self.project_dir)).replace("\\", "/")] = digest
         return result
 

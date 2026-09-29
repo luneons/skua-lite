@@ -255,6 +255,27 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
     return action, (parts[1].strip() if len(parts) > 1 else "")
 
 
+import re
+
+def _print_menu(title: str, rows: list[str], prompt: str) -> None:
+    count = 0
+    clean_rows = []
+    for row in rows:
+        match = re.match(r"^\[(\d+)\]\s*(.*)", row)
+        if match:
+            count += 1
+            clean_rows.append(f"  {match.group(1)}. {match.group(2)}")
+        else:
+            clean_rows.append(f"  {row}")
+    if count > 0:
+        print(f"[{title.upper()}] {count} {title.lower()} ditemukan:")
+    else:
+        print(f"[{title.upper()}]")
+    for r in clean_rows:
+        print(r)
+    if prompt:
+        print(f"[{title.upper()}] pilih: {prompt}")
+
 def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
     """Jalankan satu perintah farming; error dilaporkan, tidak mematikan bot."""
     runtime = getattr(orch, "farming", None)
@@ -304,9 +325,7 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
             value = parts[1].strip() if len(parts) > 1 else ""
             if not sub or sub in {"scan", "list", "ls"}:
                 rows = runtime.scan_classes() if sub != "list" and sub != "ls" else runtime.class_report()
-                for row in rows:
-                    print(f"[CLASS] {row}")
-                print("[CLASS] pilih: .class <nomor> atau .class <nama class>")
+                _print_menu("Class", rows, ".class <nomor> atau .class <nama class>")
             elif sub in {"use", "equip", "pakai"} and value:
                 print(f"[CLASS] {runtime.select_class(value)}")
             else:
@@ -320,11 +339,11 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
                 "cape": "Cape",
             }[action]
             if not arg.strip():
-                for row in runtime.scan_gear(item_type):
-                    print(f"[{action.upper()}] {row}")
-                print(
-                    f"[{action.upper()}] pilih: .{action} <nomor> "
-                    f"atau .{action} <nama item>"
+                rows = runtime.scan_gear(item_type)
+                _print_menu(
+                    action,
+                    rows,
+                    f".{action} <nomor> atau .{action} <nama item>",
                 )
             else:
                 print(
@@ -414,16 +433,13 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
             value = parts[1].strip() if len(parts) > 1 else ""
             if sub == "scan":
                 rows = runtime.scan_items()
-                for index, row in enumerate(rows, 1):
-                    print(f"[ITEM {index}] {row}")
-                print("[ITEM] pilih: .equip <nomor> atau .equip <nama item>")
+                _print_menu("Item", rows, ".equip <nomor> atau .equip <nama item>")
             elif sub == "list":
                 rows = runtime.item_report("")
-                for index, row in enumerate(rows, 1):
-                    print(f"[ITEM {index}] {row}")
+                _print_menu("Item", rows, ".equip <nomor> atau .equip <nama item>")
             elif sub == "type" and value:
-                for index, row in enumerate(runtime.item_report(value), 1):
-                    print(f"[ITEM {index}] {row}")
+                rows = runtime.item_report(value)
+                _print_menu("Item", rows, ".equip <nomor> atau .equip <nama item>")
             else:
                 raise ValueError("format: .item scan | list | type <tipe>")
         elif action == "equip":

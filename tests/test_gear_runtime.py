@@ -42,3 +42,35 @@ def test_equip_gear_name_cannot_cross_item_type():
 
     with pytest.raises(ValueError, match="weapon .*tidak ditemukan"):
         rt.equip_gear("Weapon", "Dragon Helm")
+
+
+def test_equip_weapon_accepts_item_id_for_polearm():
+    from tests.test_gear_fixes import POLEARM
+    from tests.test_inventory import _inv_packet
+
+    sent = []
+    rt = _runtime_with_items(sent)
+    rt.feed_packet(_inv_packet(POLEARM))
+
+    rt.equip_gear("Weapon", "1001")
+
+    assert "%xt%zm%equipItem%42%1001%" in sent
+
+
+def test_equip_weapon_accepts_global_item_menu_number():
+    """A number copied from `.item` remains usable in `.weapon`."""
+    from skua_lite.inventory import OwnedItem
+
+    sent = []
+    rt = _runtime_with_items(sent)
+    # Put a weapon at global menu position 5; it is weapon-menu position 1.
+    rt.item_catalog._items = [
+        OwnedItem(f"Resource {i}", i, i + 100, "Resource", "inventory")
+        for i in range(1, 5)
+    ] + [
+        OwnedItem("Golden Scythe", 99525, 599525, "Polearm", "inventory")
+    ]
+
+    rt.equip_gear("Weapon", "5")
+
+    assert "%xt%zm%equipItem%42%99525%" in sent

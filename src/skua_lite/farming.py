@@ -443,16 +443,35 @@ class FarmingRuntime:
         return self.gear_report(item_type)
 
     def equip_gear(self, item_type: str, token: str) -> str:
-        """Equip by number from that slot's menu or by exact item name."""
+        """Equip gear by menu number, ItemID, or exact name.
+
+        Weapons are sub-typed by AQW (`Polearm`, `Wand`, `Dagger`, ...), so a
+        lookup goes through `items_by_type`, which expands the category. A
+        number is tried as a menu position first, then as an ItemID, because
+        the number a user reads off `.item` is a global menu position.
+        """
         text = str(token or "").strip()
         if not text:
             raise ValueError(f"format: .{item_type.casefold()} <nomor|nama item>")
+        match: OwnedItem | None = None
         if text.isdigit():
             match = self.item_catalog.by_type_number(item_type, int(text))
+            if match is None:
+                candidates = self.item_catalog.items_by_type(item_type)
+                by_number = self.item_catalog.by_number(int(text))
+                if by_number is not None and by_number in candidates:
+                    match = by_number
+                else:
+                    candidate = self.item_catalog.find(text)
+                    if candidate is not None and candidate in candidates:
+                        match = candidate
         else:
-            match = self.item_catalog.find(text)
-            if match is not None and match.item_type.casefold() != item_type.casefold():
-                match = None
+            candidate = self.item_catalog.find(text)
+            if (
+                candidate is not None
+                and candidate in self.item_catalog.items_by_type(item_type)
+            ):
+                match = candidate
         if match is None:
             known = ", ".join(
                 item.name for item in self.item_catalog.items_by_type(item_type)

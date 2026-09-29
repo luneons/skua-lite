@@ -341,8 +341,8 @@ def test_dispatch_class_scan_lists_choices(capsys):
 
     assert cli.dispatch_farm(orch, "class", "scan") == "farm"
     output = capsys.readouterr().out
-    assert "[CLASS] [dipakai] Mage" in output
-    assert "[CLASS] [bank] Echo Shaman" in output
+    assert "  [dipakai] Mage" in output
+    assert "  [bank] Echo Shaman" in output
     assert ".class <nama class>" in output
 
 

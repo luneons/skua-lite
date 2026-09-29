@@ -7,10 +7,35 @@ numbered lookups the runtime menus use. One plain dataclass, no sockets.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from . import sfs
+
+# AQW stores weapons by *sub-type* in `sType`, never the literal word "Weapon":
+# a polearm row says "Polearm", a wand says "Wand", a generic test row may say
+# "Weapon" itself. Grouping them is what makes `.weapon` list every weapon the
+# account owns. Extend this set when a new sub-type shows up in a scan; it is
+# the only place that mapping lives.
+WEAPON_TYPES = frozenset({
+    "weapon", "sword", "axe", "dagger", "polearm", "staff", "wand", "mace",
+    "bow", "gun", "handgun", "whip", "gauntlet",
+})
+
+# Category name -> the concrete `sType` values that belong to it.
+CATEGORY_TYPES: dict[str, frozenset[str]] = {
+    "weapon": WEAPON_TYPES,
+    "armor": frozenset({"armor"}),
+    "helm": frozenset({"helm", "helmet"}),
+    "cape": frozenset({"cape"}),
+    "class": frozenset({"class"}),
+}
+
+
+def category_types(category: str) -> frozenset[str] | None:
+    """Concrete `sType` values for a category, or None when not a category."""
+    return CATEGORY_TYPES.get(str(category or "").strip().casefold())
 
 
 @dataclass(slots=True)
@@ -79,7 +104,13 @@ class ItemCatalog:
 
     def items_by_type(self, item_type: str) -> list[OwnedItem]:
         wanted = str(item_type or "").strip().casefold()
-        return [item for item in self._items if item.item_type.casefold() == wanted]
+        cat_types = category_types(wanted)
+        if cat_types is not None:
+            return [it for it in self._items if it.item_type.casefold() in cat_types]
+        return [it for it in self._items if it.item_type.casefold() == wanted]
+
+    def items_by_category(self, category: str) -> list[OwnedItem]:
+        return self.items_by_type(category)
 
     def by_number(self, number: int) -> OwnedItem | None:
         index = _as_int(number, 0) - 1
@@ -99,7 +130,7 @@ class ItemCatalog:
         if not wanted:
             return None
         for item in self._items:
-            if item.name.casefold() == wanted:
+            if item.name.casefold() == wanted or str(item.item_id) == wanted:
                 return item
         return None
 
