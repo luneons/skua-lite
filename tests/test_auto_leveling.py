@@ -139,6 +139,77 @@ def test_level_stop_stops_leveling_only(capsys):
     runtime.stop_leveling.assert_called_once()
 
 
+def test_start_and_stop_leveling_toggle_state_without_joining():
+    import time
+
+    bot = _bot()
+    bot.level = 12
+    bot.current_map = "swordhavenundead-100000"
+    runtime = FarmingRuntime(bot=bot)
+    runtime.join = Mock()
+    runtime.combat = Mock()
+    runtime.combat.running = True
+    runtime.combat.state = Mock(cell="Gates", map_file_name="swordhavenundead.swf")
+    runtime._send = Mock()
+
+    runtime.start_leveling(100)
+    runtime.join.assert_not_called()
+
+    runtime.stop_leveling()
+    deadline = time.monotonic() + 5
+    while runtime.is_leveling() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not runtime.is_leveling()
+
+
+def test_leveling_loop_retargets_named_monster(monkeypatch):
+    import threading
+
+    bot = _bot()
+    bot.level = 12  # swordhavenundead / Undead Giant
+    bot.current_map = "swordhavenundead-100000"
+    bot.room_id = 42
+    runtime = FarmingRuntime(bot=bot)
+
+    state = Mock()
+    state.cell = "Gates"
+    state.map_file_name = "swordhavenundead.swf"
+    runtime.combat = Mock()
+    runtime.combat.state = state
+    runtime.combat.running = True
+    runtime.join = Mock()
+    runtime.move_to_cell = Mock()
+    runtime._send = Mock()
+
+    runtime._leveling_target = 100
+    runtime._leveling_stop.clear()
+
+    import time
+    old_sleep = time.sleep
+    monkeypatch.setattr(time, "sleep", lambda s: old_sleep(0.01))
+
+    t = threading.Thread(target=runtime._leveling_loop)
+    t.start()
+    deadline = time.monotonic() + 3
+    while runtime.combat.set_target.call_count == 0 and time.monotonic() < deadline:
+        old_sleep(0.05)
+    runtime._leveling_stop.set()
+    t.join(timeout=2.0)
+
+    runtime.combat.set_target.assert_called_with("Undead Giant")
+
+
+def test_start_leveling_does_not_join_before_background_loop():
+    runtime = FarmingRuntime(bot=Mock(level=22))
+    runtime.join = Mock(side_effect=AssertionError("join called synchronously"))
+    runtime._leveling_loop = Mock()
+
+    message = runtime.start_leveling(100)
+
+    assert message == "auto leveling level 22 → 100"
+    runtime.join.assert_not_called()
+
+
 def test_leveling_loop_survives_join_bot_error(monkeypatch):
     import threading
     from skua_lite.bot import BotError

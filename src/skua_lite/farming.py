@@ -630,12 +630,9 @@ class FarmingRuntime:
         if current >= goal:
             return f"sudah level {current}; target {goal} tercapai"
         spot = self._level_bracket(current)
+        if spot is None:
+            return f"sudah level {current}; target {goal} tercapai"
         self._leveling_target = goal
-        if spot is not None:
-            try:
-                self.join(spot.map_name)
-            except FarmingUnsupported:
-                pass
         self._leveling_stop.clear()
         thread = threading.Thread(
             target=self._leveling_loop, name="auto-level", daemon=True
@@ -703,14 +700,14 @@ class FarmingRuntime:
                     self._send(sfs.accept_quest_packet(self.bot.room_id, q),
                                f"accept quest {q}")
 
-            # Start fighting
-            if not self.combat.running:
-                # If target is specific (like Undead Giant), set it;
-                # else clear map.
-                if spot.target and spot.target != "*":
-                    self.attack(spot.target)
-                else:
-                    self.fight_all_in_map()
+            # Start fighting. A band's monster differs from the previous
+            # band's, so retarget the engine before starting it.
+            if spot.target and spot.target != "*":
+                self.combat.set_target(spot.target)
+                if not self.combat.running:
+                    self.combat.start()
+            elif not self.combat.running:
+                self.fight_all_in_map()
 
             # Quest turn-in is cheap and server-judged, so it repeats.
             for q in spot.quests:

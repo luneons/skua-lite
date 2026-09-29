@@ -691,6 +691,26 @@ class AutoAttackEngine:
         with self._lock:
             return set(self._blocked_cells)
 
+    def set_target(self, target_name: str) -> None:
+        """Retarget the engine, e.g. when auto-leveling moves to a new spot.
+
+        Without this the engine keeps hunting the previous band's monster
+        forever, because ``_monsters_to_fight`` matches on ``target_name``.
+        """
+        name = str(target_name or "").strip()
+        if not name:
+            raise ValueError("target_name kosong")
+        with self._lock:
+            if name.casefold() == self.target_name.casefold():
+                return
+            self.target_name = name
+            self._move_target = None
+            self._move_attempts = 0
+            self._blocked_cells.clear()
+            self._move_status = ""
+            self._last_auto_log = -1e9
+        self.on_log(f"[COMBAT] target -> {name}")
+
     def set_map_wide(self, enabled: bool) -> None:
         """Enable/disable the goal "lawan semua musuh yang ada di map ini"."""
         with self._lock:
