@@ -458,6 +458,35 @@ def parse_str_packet(text: str) -> dict | None:
     return {"name": name, "cmd": cmd, "room": room, "args": tail}
 
 
+def parse_uotls(text: str) -> dict | None:
+    """Parse `%xt%uotls%-1%<username>%k:v,k:v%` player-field updates.
+
+    AQW routes another player's movement/cell change through this packet
+    (``Game.as:1411-1420`` builds the field map, ``userTreeWrite`` at 5377+
+    converts ``tx``/``ty``/``sp`` to int). Outbound mirrors use ``mv``
+    (``World.as:3491``) and ``moveToCell`` (``World.as:2884``).
+    """
+    parts = text.split(MSG_STR)
+    if len(parts) < 6 or parts[1:3] != ["xt", "uotls"]:
+        return None
+    username = parts[4]
+    if not username:
+        return None
+    fields: dict[str, object] = {}
+    for chunk in parts[5].split(","):
+        key, sep, value = chunk.partition(":")
+        if not sep or not key:
+            continue
+        if key.lower() in {"tx", "ty", "sp"} or key.lower().startswith("int"):
+            try:
+                fields[key] = int(value)
+            except (ValueError, TypeError):
+                fields[key] = None
+        else:
+            fields[key] = value
+    return {"username": username, "fields": fields}
+
+
 def parse_chat_message(text: str) -> dict | None:
     """Parse AQW chatm packet into channel/message/sender metadata.
 

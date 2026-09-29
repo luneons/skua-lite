@@ -18,6 +18,7 @@ from typing import Callable
 
 from . import client, config, sfs
 from .ai_router import is_owner_account, is_owner_id
+from .follow import OwnerFollower, parse_follow_command
 from .servers import Server
 
 
@@ -74,6 +75,7 @@ class AQWBot:
         self.on_log = on_log or (lambda msg: None)
         self.on_packet = on_packet or (lambda p, out: None)
         self.ai_router = ai_router
+        self.follow = OwnerFollower()
         self._greeted_uids: set[int] = set()
 
         self.state: BotState = BotState.DISCONNECTED
@@ -359,6 +361,15 @@ class AQWBot:
             if parsed_area is not None:
                 self.current_map, self.room_id = parsed_area
 
+        # Owner follow mode mirrors the followed player's ``uotls`` updates.
+        # Checked before the chat router so mirroring never depends on AI state.
+        user_update = sfs.parse_uotls(pkt)
+        if user_update is not None and self.follow.is_following:
+            for outgoing in self.follow.packets_for_update(
+                self.room_id, user_update["username"], user_update["fields"]
+            ):
+                self._send_raw(outgoing)
+
         if self.ai_router is not None:
             user_enter = sfs.parse_user_enter_room(pkt)
             if user_enter is not None:
@@ -408,6 +419,13 @@ class AQWBot:
                 name = self.ai_router.seen_name(user_gone["user_id"])
                 self.ai_router.note_presence("keluar", name, user_gone["user_id"])
                 self._greeted_uids.discard(user_gone["user_id"])
+                if self.follow.matches("", user_gone["user_id"]):
+                    for outgoing in self.follow.packets_for_departure():
+                        self._send_raw(outgoing)
+                    self.on_log(
+                        "[FOLLOW] owner meninggalkan area; goto "
+                        f"{self.follow.owner_name}"
+                    )
                 if self.ai_router.owner_left_location(user_id=user_gone["user_id"]):
                     return
             departure = sfs.parse_exit_area(pkt)
@@ -416,6 +434,13 @@ class AQWBot:
                     "keluar", departure["username"], departure["user_id"]
                 )
                 self._greeted_uids.discard(departure["user_id"])
+                if self.follow.matches(departure["username"], departure["user_id"]):
+                    for outgoing in self.follow.packets_for_departure():
+                        self._send_raw(outgoing)
+                    self.on_log(
+                        "[FOLLOW] owner meninggalkan area; goto "
+                        f"{self.follow.owner_name}"
+                    )
                 if self.ai_router.owner_left_location(
                     departure["username"], departure["user_id"]
                 ):
@@ -427,6 +452,20 @@ class AQWBot:
             channel = chat["channel"]
             msg = chat["message"]
             self.on_log(f"[{channel.upper()}] {sender}: {msg}")
+            # Owner follow commands are handled here rather than in the AI
+            # router: this layer already knows the active owner UID, and the
+            # mirror must not wait on a language-model round trip.
+            follow_command = parse_follow_command(msg)
+            if follow_command is not None and self._is_active_owner(
+                sender, chat["user_id"]
+            ):
+                if follow_command == "start":
+                    self.follow.start(sender, chat["user_id"])
+                    self.on_log(f"[FOLLOW] mulai mengikuti {sender}")
+                else:
+                    self.follow.stop()
+                    self.on_log("[FOLLOW] berhenti mengikuti owner")
+                return
             if self.ai_router is not None:
                 self.ai_router.note_chat(sender, msg, channel)
                 self.ai_router.handle_message(
@@ -435,6 +474,27 @@ class AQWBot:
                     is_self=sender.lower() == self.username.lower(),
                     sender_id=chat["user_id"],
                 )
+
+    def _is_active_owner(self, username: str, user_id: int | None) -> bool:
+        """Authenticate follow commands against the router's active owner.
+
+        A known owner UID/name is not enough once owner lock has selected a
+        session; only that active owner may change follow mode.
+        """
+        if self.ai_router is None:
+            return False
+        active_id = getattr(self.ai_router, "active_owner_id", None)
+        active_name = getattr(self.ai_router, "active_owner_name", None)
+        if active_id is not None:
+            return user_id is not None and int(user_id) == int(active_id)
+        if not getattr(self.ai_router, "owner_present", False):
+            return False
+        if active_name:
+            return (
+                " ".join((username or "").split()).casefold()
+                == " ".join(str(active_name).split()).casefold()
+            )
+        return False
 
     def _send_keepalive(self) -> None:
         # Kirim roundTrip ping (XML sys) agar server tidak disconnect karena idle

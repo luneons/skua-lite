@@ -212,6 +212,7 @@ debug, quit.
         ultra_guide.py  # loader & retrieval panduan ultra boss (*.md)
         client.py       # TCP client (poll non-blok, antrian paket)
         bot.py          # state machine: login -> join -> active/afk
+        follow.py       # mode `Ikuti aku`: salin gerak owner + goto saat keluar
         area_state.py     # snapshot area dinamis, generation, provenance wire
         area_replay.py    # replay offline capture tersanitasi + expected snapshot
         map_cells.py      # scan label frame SWF untuk daftar cell lengkap
@@ -285,6 +286,10 @@ kata `Master`/`Tuan`. Jawab singkat sesuai pertanyaan, tanpa basa-basi. Pemilik 
 persis `MODE NORMAL` untuk membuka lock sambil mempertahankan AI ON **dan Admin Mode**.
 Pemilik dapat mengirim perintah admin khusus pemilik lewat prefix `!`
 (hanya UID/nama pemilik aktif yang dieksekusi; pemain lain diabaikan):
+Selain itu tersedia perintah follow biasa `Ikuti aku` (bot menyalin
+gerak cell/koordinat owner; saat owner keluar area/map, bot otomatis
+`/goto <owner>` lalu melanjutkan mirroring saat update owner masuk lagi)
+dan `Berhenti ikuti aku` untuk berhenti.
 
     !cari <query>     -> riset web umum via hermes agent (tidak terbatas AQW)
     !join <map>       -> pindah map/room, misal `!join yulgar`

@@ -105,6 +105,28 @@ def test_retrieve_inventory_packet_contains_session_uid():
     assert body == "%xt%zm%retrieveInventory%3%21030%"
 
 
+def test_parse_uotls_extracts_owner_movement_fields():
+    packet = "%xt%uotls%-1%mele%strFrame:Boss,strPad:Left,tx:850,ty:302,sp:10%"
+    assert sfs.parse_uotls(packet) == {
+        "username": "mele",
+        "fields": {
+            "strFrame": "Boss",
+            "strPad": "Left",
+            "tx": 850,
+            "ty": 302,
+            "sp": 10,
+        },
+    }
+
+
+def test_parse_uotls_rejects_other_packets_and_bad_numbers():
+    assert sfs.parse_uotls("%xt%mtls%-1%1%tx:10,ty:20%") is None
+    assert sfs.parse_uotls("%xt%uotls%-1%mele%tx:nope,ty:20%") == {
+        "username": "mele",
+        "fields": {"tx": None, "ty": 20},
+    }
+
+
 def test_parse_chatm_extracts_channel_message_sender_and_room():
     packet = "%xt%chatm%-1%zone~le lagi ngapain?%Alice%21030%273%0%"
     assert sfs.parse_chat_message(packet) == {
