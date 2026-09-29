@@ -38,14 +38,8 @@ def test_dispatch_farm_routes_auto_command_to_planner():
     
     assert result == "farm"
     
-    # Did it parse and set the goal?
-    orch.bot.auto_planner.set_goal.assert_called_once()
-    goal = orch.bot.auto_planner.set_goal.call_args[0][0]
-    assert isinstance(goal, AutoGoal)
-    assert goal.kind == "drop"
-    assert goal.drop_name.casefold() == "bone"
-    assert goal.target_name.casefold() == "skeleton"
-    assert goal.quantity == 5
+    # Did it route to the farming runtime?
+    orch.farming.set_auto_goal.assert_called_once_with(goal)
 
 
 def test_dispatch_farm_rejects_malformed_auto_command_and_does_not_set_goal():

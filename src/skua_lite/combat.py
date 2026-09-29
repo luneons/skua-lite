@@ -183,11 +183,25 @@ class ClassProfile:
         refs: list[str] = []
         for skill_id in selected.get("skills", []):
             index = _as_int(skill_id, -1)
-            refs.append("aa" if index == 0 else f"a{index}")
+            refs.append(_ref_for_skill(index))
         fallback = str(selected.get("fallback") or "").strip()
         if fallback and fallback not in refs:
             refs.append(fallback)
         return tuple(refs)
+
+
+def _ref_for_skill(index: int) -> str:
+    """Map a skill slot to its action ref.
+
+    ``0`` is the staff swing (``aa``); anything above ``4`` is a class-use
+    item button and resolves to the same item slot ``i1`` the engine already
+    sends. Unknown garbage lands on ``i1`` rather than an unroutable ref.
+    """
+    if index == 0:
+        return "aa"
+    if 1 <= index <= 4:
+        return f"a{index}"
+    return "i1"
 
 
 def mage_profile() -> ClassProfile:
@@ -212,8 +226,46 @@ def generic_profile(class_name: str) -> ClassProfile:
     )
 
 
+def profile_from_rotations(class_name: str) -> ClassProfile | None:
+    """Build a live profile from the per-class rotation table, if known."""
+    from . import class_rotations
+
+    name = str(class_name or "").strip()
+    if not name:
+        return None
+    modes = class_rotations.lookup_rotations(name)
+    if not modes:
+        return None
+    built: dict[str, dict[str, Any]] = {}
+    for mode, order in modes.items():
+        if not order:
+            continue
+        built[mode] = {"skills": list(order), "fallback": "aa"}
+    if not built:
+        return None
+    canonical = name
+    for known in class_rotations.load_rotations():
+        if known.casefold() == name.casefold():
+            canonical = known
+            break
+    if "base" not in built:
+        built["base"] = dict(next(iter(built.values())))
+    if "farm_fast" not in built:
+        built["farm_fast"] = dict(built["base"])
+    return ClassProfile.from_dict({
+        "class_name": canonical,
+        "aliases": [canonical, name],
+        "modes": built,
+    })
+
+
 def profile_for(class_name: str) -> ClassProfile:
-    """File profile when the class has one, else a generic live-sAct profile."""
+    """File profile when the class has one, else a generic live-sAct profile.
+
+    Resolution order is deliberate: a hand-verified JSON in ``class_profiles``
+    wins, then the real per-class rotation imported from Skua, then the generic
+    order. The engine still gates every action on live ``sAct`` state.
+    """
     wanted = str(class_name or "").strip().casefold()
     directory = Path(__file__).with_name("class_profiles")
     for path in sorted(directory.glob("*.json")):
@@ -223,7 +275,8 @@ def profile_for(class_name: str) -> ClassProfile:
             continue
         if candidate.matches(wanted):
             return candidate
-    return generic_profile(class_name)
+    imported = profile_from_rotations(class_name)
+    return imported if imported is not None else generic_profile(class_name)
 
 
 @dataclass(slots=True)

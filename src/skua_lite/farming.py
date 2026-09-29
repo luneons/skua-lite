@@ -17,6 +17,7 @@ from typing import Any, Callable
 from .auto_planner import AutoDecision, AutoGoal, AutoObservation, AutoPlanner
 from . import combat, sfs
 from .area_state import AreaStateStore
+from .inventory import ItemCatalog, OwnedItem
 from .map_cells import MapCellScanner, SWFCellError
 
 
@@ -61,6 +62,9 @@ class FarmingRuntime:
         self._scanned_map = ""
         self._scan_thread: threading.Thread | None = None
         self._observed_class = ""
+        # Full item picture (inventory + bank, every type), separate from the
+        # class-only view combat keeps for its profile.
+        self.item_catalog = ItemCatalog()
         self.area_state = AreaStateStore(
             self_username=str(getattr(bot, "username", "")),
             self_user_id=getattr(bot, "session_user_id", None),
@@ -109,6 +113,10 @@ class FarmingRuntime:
         if not outbound:
             self._sync_class_profile()
             self.area_state.feed(packet)
+            try:
+                self.item_catalog.feed(packet)
+            except Exception:
+                pass
             self._scan_map_cells_if_changed()
 
     def _sync_class_profile(self) -> None:
@@ -370,22 +378,144 @@ class FarmingRuntime:
         self._send(sfs.load_bank_packet(self.bot.room_id), "muat bank")
 
     def class_report(self) -> list[str]:
-        """List every detected class: equipped, inventory, and bank sources."""
+        """Numbered menu of every detected class: equipped, inventory, bank.
+
+        The number is what `.class use <nomor>` accepts, so the user never has
+        to retype an exact class name.
+        """
         rows = []
-        state = self.combat.state
-        for entry in state.owned_classes:
+        classes = self.item_catalog.items_by_type("Class")
+        for index, item in enumerate(classes, 1):
             marker = {
                 "equipped": "[dipakai]",
                 "inventory": "[inventory]",
                 "bank": "[bank]",
-            }.get(entry.source, f"[{entry.source}]")
-            rows.append(f"{marker} {entry.name} (ItemID {entry.item_id})")
+            }.get(item.source, f"[{item.source}]")
+            rows.append(f"[{index}] {marker} {item.name} (ItemID {item.item_id})")
         if not rows:
+            state = self.combat.state
             rows.append(
                 f"belum ada class terdeteksi; jalankan `.class scan` "
                 f"(dipakai sekarang: {state.class_name or '?'})"
             )
         return rows
+
+    def _resolve_class(self, token: str) -> OwnedItem | None:
+        """Accept either a 1-based menu number or an exact class name."""
+        text = str(token or "").strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return self.item_catalog.by_type_number("Class", int(text))
+        return self.item_catalog.find(text)
+
+    def item_report(self, item_type: str = "") -> list[str]:
+        """Numbered menu of every scanned item, optionally filtered by type."""
+        items = (
+            self.item_catalog.items_by_type(item_type)
+            if item_type.strip()
+            else self.item_catalog.all_items()
+        )
+        rows = []
+        for index, item in enumerate(items, 1):
+            marker = {
+                "equipped": "[dipakai]",
+                "inventory": "[inventory]",
+                "bank": "[bank]",
+            }.get(item.source, f"[{item.source}]")
+            rows.append(
+                f"[{index}] {marker} {item.name} "
+                f"({item.item_type}, ItemID {item.item_id})"
+            )
+        if not rows:
+            rows.append(
+                "belum ada item terdeteksi; jalankan `.item scan` dulu"
+            )
+        return rows
+
+    def equip_item(self, token: str) -> str:
+        """Equip any scanned item by menu number or exact name.
+
+        Classes and gear use the same path: move from bank first when needed,
+        then send the server's own `equipItem` command.
+        """
+        text = str(token or "").strip()
+        if not text:
+            raise ValueError("format: .equip <nomor|nama item>")
+        if text.isdigit():
+            match = self.item_catalog.by_number(int(text))
+        else:
+            match = self.item_catalog.find(text)
+        if match is None:
+            known = ", ".join(item.name for item in self.item_catalog.all_items()[:20])
+            raise ValueError(
+                f"item '{text}' tidak ditemukan "
+                f"(terdeteksi: {known or 'belum ada'})"
+            )
+        if match.source == "equipped":
+            return f"{match.name} sudah dipakai"
+        if match.source == "bank":
+            self.bank_to_inventory(match.item_id, match.char_item_id)
+        self._send(
+            sfs.equip_item_packet(self.bot.room_id, match.item_id),
+            f"equip {match.name}",
+        )
+        # A class changes the skill kit; gear does not.
+        if match.item_type.casefold() == "class":
+            self._adopt_equipped_profile(assume=match.name)
+            return f"equip {match.name}; tunggu sAct live untuk skill"
+        return f"equip {match.name} ({match.item_type})"
+
+    def select_class(self, class_name: str) -> str:
+        """Equip a detected class by menu number or name."""
+        wanted = str(class_name or "").strip()
+        if not wanted:
+            raise ValueError("format: .class use <nomor|nama class>")
+        match = self._resolve_class(wanted)
+        if match is None:
+            self.scan_classes(timeout=6.0)
+            match = self._resolve_class(wanted)
+        if match is None:
+            known = ", ".join(
+                item.name for item in self.item_catalog.items_by_type("Class")
+            )
+            raise ValueError(
+                f"class '{wanted}' tidak terdeteksi "
+                f"(terdeteksi: {known or 'tidak ada'})"
+            )
+        if match.source == "equipped":
+            self._adopt_equipped_profile()
+            return f"{match.name} sudah dipakai"
+        if match.source == "bank":
+            # The server processes the transfer asynchronously; equipping in a
+            # separate step once inventory confirms is the safe order.
+            self.bank_to_inventory(match.item_id, match.char_item_id)
+        self._send(
+            sfs.equip_item_packet(self.bot.room_id, match.item_id),
+            f"equip class {match.name}",
+        )
+        self._adopt_equipped_profile(assume=match.name)
+        where = "bank" if match.source == "bank" else "inventory"
+        return f"equip {match.name} dari {where}; tunggu sAct live untuk skill"
+
+    def scan_items(self, timeout: float = 8.0) -> list[str]:
+        """Request full inventory+bank and return a numbered all-item menu."""
+        have_inventory = bool(self.item_catalog.all_items())
+        if not have_inventory:
+            room = int(getattr(self.bot, "room_id", 1) or 1)
+            uid = int(getattr(self.bot, "session_user_id", 0) or 0)
+            if uid > 0:
+                self._send(
+                    sfs.retrieve_inventory_packet(room, uid), "minta inventory"
+                )
+        if not self.item_catalog.bank_loaded:
+            self.load_bank()
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while time.monotonic() < deadline:
+            if self.item_catalog.all_items() and self.item_catalog.bank_loaded:
+                break
+            time.sleep(0.05)
+        return self.item_report("")
 
     def scan_classes(self, timeout: float = 8.0) -> list[str]:
         """Request inventory+bank, then keep packets the main loop feeds us."""
@@ -408,48 +538,6 @@ class FarmingRuntime:
                     break
             time.sleep(0.05)
         return self.class_report()
-
-    def select_class(self, class_name: str) -> str:
-        """Equip a detected class: bankToInv first when it lives in the bank."""
-        wanted = str(class_name or "").strip().casefold()
-        if not wanted:
-            raise ValueError("format: .class use <nama class>")
-        state = self.combat.state
-        match: combat.OwnedClass | None = None
-        for entry in state.owned_classes:
-            if entry.name.casefold() != wanted:
-                continue
-            if match is None or entry.source == "equipped":
-                match = entry
-            if entry.source == "equipped":
-                break
-        if match is None:
-            self.scan_classes(timeout=6.0)
-            for entry in state.owned_classes:
-                if entry.name.casefold() != wanted:
-                    continue
-                if match is None or entry.source == "equipped":
-                    match = entry
-                if entry.source == "equipped":
-                    break
-        if match is None:
-            known = ", ".join(entry.name for entry in state.owned_classes)
-            raise ValueError(
-                f"class '{class_name.strip()}' tidak terdeteksi "
-                f"(terdeteksi: {known or 'tidak ada'})"
-            )
-        if match.source == "equipped":
-            self._adopt_equipped_profile()
-            return f"{match.name} sudah dipakai"
-        if match.source == "bank":
-            self.bank_to_inventory(match.item_id, match.char_item_id)
-        self._send(
-            sfs.equip_item_packet(self.bot.room_id, match.item_id),
-            f"equip class {match.name}",
-        )
-        self._adopt_equipped_profile(assume=match.name)
-        where = "bank" if match.source == "bank" else "inventory"
-        return f"equip {match.name} dari {where}; tunggu sAct live untuk skill"
 
     def _adopt_equipped_profile(self, assume: str = "") -> None:
         # An explicit equip request is authoritative until the server confirms:

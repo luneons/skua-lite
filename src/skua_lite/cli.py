@@ -247,7 +247,7 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
     known = {
         "status", "st", "join", "move", "drop", "rest", "booster", "aggro",
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
-        "capture", "chat", "goal", "area", "class", "auto"
+        "capture", "chat", "goal", "area", "class", "auto", "item", "equip"
     }
     if action not in known:
         return "", ""
@@ -305,7 +305,7 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
                 rows = runtime.scan_classes() if sub == "scan" else runtime.class_report()
                 for index, row in enumerate(rows, 1):
                     print(f"[CLASS {index}] {row}")
-                print("[CLASS] pilih: .class use <nama class>")
+                print("[CLASS] pilih: .class use <nomor> atau .class use <nama class>")
             elif sub in {"use", "equip", "pakai"} and value:
                 print(f"[CLASS] {runtime.select_class(value)}")
             else:
@@ -373,20 +373,42 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
                 # Empty means: garbage auto command like "auto" alone.
                 print("[WARN] tujuan auto tidak dikenal. Contoh: auto cari Bone x5 dari Skeleton")
                 return None
-            if arg in ("stop", "berhenti"):
-                planner.stop()
-                print("[AUTO] tujuan dihentikan.")
-            elif arg == "status":
-                print(f"[AUTO] {planner.status()}")
-            else:
-                # arg is an AutoGoal parsed by parse_farm_command above
-                from .auto_planner import AutoGoal  # avoid top-level circular
-                if isinstance(arg, AutoGoal):
-                    planner.set_goal(arg)
+            from .auto_planner import AutoGoal  # local: cli.py loads at startup
+            if arg in ("stop", "berhenti", "status"):
+                if arg == "status":
                     print(f"[AUTO] {planner.status()}")
                 else:
-                    print("[WARN] tujuan auto tidak dikenal. Contoh: auto cari Bone x5 dari Skeleton")
-                    return None
+                    planner.stop()
+                    print("[AUTO] tujuan dihentikan.")
+            elif isinstance(arg, AutoGoal):
+                # Farm-style goals run the planner loop; refusing unknown ones early.
+                runtime.set_auto_goal(arg)
+                print(f"[AUTO] {planner.status()}")
+            else:
+                print("[WARN] tujuan auto tidak dikenal. Contoh: auto cari Bone x5 dari Skeleton")
+                return None
+        elif action == "item":
+            parts = arg.split(maxsplit=1)
+            sub = parts[0].lower() if parts else "scan"
+            value = parts[1].strip() if len(parts) > 1 else ""
+            if sub == "scan":
+                rows = runtime.scan_items()
+                for index, row in enumerate(rows, 1):
+                    print(f"[ITEM {index}] {row}")
+                print("[ITEM] pilih: .equip <nomor> atau .equip <nama item>")
+            elif sub == "list":
+                rows = runtime.item_report("")
+                for index, row in enumerate(rows, 1):
+                    print(f"[ITEM {index}] {row}")
+            elif sub == "type" and value:
+                for index, row in enumerate(runtime.item_report(value), 1):
+                    print(f"[ITEM {index}] {row}")
+            else:
+                raise ValueError("format: .item scan | list | type <tipe>")
+        elif action == "equip":
+            if not arg.strip():
+                raise ValueError("format: .equip <nomor|nama item>")
+            print(f"[EQUIP] {runtime.equip_item(arg.strip())}")
         else:
             print(f"[WARN] perintah farming '{action}' tidak dikenal.")
             return None
