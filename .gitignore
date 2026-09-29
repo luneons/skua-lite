@@ -4,6 +4,7 @@
 !.env.example
 *.log
 .map_cache/
+.vscode/
 last_packet.txt
 nul
 

@@ -137,7 +137,27 @@ def test_chat_slash_goto_keeps_spaced_player_name_as_one_argument():
     assert not any("%message%" in packet for packet in sent)
 
 
-def test_chat_unknown_slash_command_uses_cmd_and_not_public_chat():
+def test_chat_slash_goto_local_player_moves_to_scanned_cell_instead_of_cmd():
+    sent: list[str] = []
+    b = bot.AQWBot(
+        username="myuser",
+        token="T",
+        server=Server("Yorumi", "127.0.0.1", 5588, True, False, False),
+    )
+    b.state = bot.BotState.IN_MAP
+    b.room_id = 42
+    b._area_players = {
+        "myuser": ("Enter", "Spawn"),
+        "mele": ("Boss", "Left"),
+    }
+    b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
+
+    b.chat("/goto MELE")
+
+    assert sent == ["%xt%zm%moveToCell%42%Boss%Left%"]
+
+
+def test_chat_unknown_slash_command_is_rejected_and_never_sent():
     sent: list[str] = []
     b = bot.AQWBot(
         username="myuser",
@@ -147,10 +167,10 @@ def test_chat_unknown_slash_command_uses_cmd_and_not_public_chat():
     b.state = bot.BotState.IN_MAP
     b._send_raw = lambda packet: sent.append(packet.rstrip(b"\x00").decode("latin-1"))
 
-    b.chat("/who ME LE")
+    with pytest.raises(bot.BotError, match="slash command tidak didukung"):
+        b.chat("/terbang ME LE")
 
-    assert sent == ["%xt%zm%cmd%1%who%ME LE%"]
-    assert not any("%message%" in packet for packet in sent)
+    assert sent == []
 
 
 def test_chat_slash_join_triggers_join_map(mock_yorumi):
