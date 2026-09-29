@@ -467,24 +467,51 @@ def parse_uotls(text: str) -> dict | None:
     (``World.as:3491``) and ``moveToCell`` (``World.as:2884``).
     """
     parts = text.split(MSG_STR)
-    if len(parts) < 6 or parts[1:3] != ["xt", "uotls"]:
-        return None
-    username = parts[4]
-    if not username:
-        return None
+    if len(parts) >= 6 and parts[1:3] == ["xt", "uotls"]:
+        username = parts[4]
+        if username:
+            return {"username": username, "fields": _uotls_fields(parts[5])}
+    # JSON envelope: {"t":"xt","b":{"r":N,"o":{"cmd":"uotls","unm":..,"o":{..}}}}
+    return _parse_uotls_json(text)
+
+
+def _uotls_fields(encoded: object) -> dict:
+    """Normalize one ``uotls`` body; numeric keys stay ints like the client.
+
+    Accepts the STR ``k:v,k:v`` string or an already-decoded JSON dict;
+    string numbers (``"850"``) convert to int the way ``userTreeWrite``
+    coerces ``tx``/``ty``/``sp``/``int*`` (``Game.as:5403``).
+    """
+    pairs: list[tuple[str, object]] = []
+    if isinstance(encoded, dict):
+        pairs = list(encoded.items())
+    elif isinstance(encoded, str):
+        for chunk in encoded.split(","):
+            key, sep, value = chunk.partition(":")
+            if sep and key:
+                pairs.append((key, value))
     fields: dict[str, object] = {}
-    for chunk in parts[5].split(","):
-        key, sep, value = chunk.partition(":")
-        if not sep or not key:
-            continue
+    for key, value in pairs:
         if key.lower() in {"tx", "ty", "sp"} or key.lower().startswith("int"):
             try:
-                fields[key] = int(value)
+                fields[key] = int(value) if value is not None else None
             except (ValueError, TypeError):
                 fields[key] = None
         else:
             fields[key] = value
-    return {"username": username, "fields": fields}
+    return fields
+
+
+def _parse_uotls_json(text: str) -> dict | None:
+    """Parse the JSON envelope ``{"cmd":"uotls","unm":..,"o":{..}}``."""
+    parsed = parse_xt_json(text)
+    if parsed is None or parsed.get("cmd") != "uotls":
+        return None
+    obj = parsed.get("obj") or {}
+    username = obj.get("unm") or obj.get("username")
+    if not username:
+        return None
+    return {"username": str(username), "fields": _uotls_fields(obj.get("o"))}
 
 
 def parse_chat_message(text: str) -> dict | None:

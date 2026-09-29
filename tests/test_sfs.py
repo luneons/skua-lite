@@ -127,6 +127,24 @@ def test_parse_uotls_rejects_other_packets_and_bad_numbers():
     }
 
 
+def test_parse_uotls_reads_json_form_too():
+    packet = (
+        '{"t":"xt","b":{"r":273,"o":{"cmd":"uotls","unm":"mele",'
+        '"o":{"strFrame":"Boss","strPad":"Left","tx":"850","ty":"302",'
+        '"sp":"14"}}}}'
+    )
+    assert sfs.parse_uotls(packet) == {
+        "username": "mele",
+        "fields": {
+            "strFrame": "Boss",
+            "strPad": "Left",
+            "tx": 850,
+            "ty": 302,
+            "sp": 14,
+        },
+    }
+
+
 def test_parse_chatm_extracts_channel_message_sender_and_room():
     packet = "%xt%chatm%-1%zone~le lagi ngapain?%Alice%21030%273%0%"
     assert sfs.parse_chat_message(packet) == {
