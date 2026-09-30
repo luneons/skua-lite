@@ -38,6 +38,7 @@ def test_canto_vi_is_map_item_quest_no_cell():
 def test_farming_quests_are_7979_7980_7981_only():
     assert SCW_XP_SPOT.quests == (7979, 7980, 7981)
     assert SCW_XP_SPOT.map_name == "sevencircleswar"
+    assert (SCW_XP_SPOT.cell, SCW_XP_SPOT.pad) == ("Enter", "Right")
     assert SCW_XP_SPOT.target == "Wrath Guard"
 
 

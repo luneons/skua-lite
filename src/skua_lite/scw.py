@@ -45,7 +45,7 @@ SEVEN_CIRCLES_CHAIN: tuple[QuestStep, ...] = (
 )
 
 SCW_GATE_QUEST = 7977
-SCW_XP_SPOT = XPSpot("sevencircleswar", "r9", "Left", (7979, 7980, 7981), target="Wrath Guard")
+SCW_XP_SPOT = XPSpot("sevencircleswar", "Enter", "Right", (7979, 7980, 7981), target="Wrath Guard")
 
 
 class SCWDependencyPlanner:

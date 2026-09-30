@@ -729,7 +729,7 @@ class FarmingRuntime:
         """Best spot, or story repair when SCW is rejected.
 
         The SCW gate is authoritative: an accepted 7977 means the farming chain
-        is unlocked, so farm sevencircleswar r9 immediately; a rejected 7977
+        is unlocked, so farm sevencircleswar Enter/Right immediately; a rejected 7977
         suspends leveling to the first missing Seven Circles step. Before either
         signal arrives, keep Skua brackets.
         """

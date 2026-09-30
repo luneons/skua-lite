@@ -194,7 +194,7 @@ def test_scw_dependency_planner_uses_best_spot_only_after_gate():
     quests.feed(accepted)
     spot = planner.best_xp_spot()
     assert (spot.map_name, spot.cell, spot.quests) == (
-        "sevencircleswar", "r9", (7979, 7980, 7981)
+        "sevencircleswar", "Enter", (7979, 7980, 7981)
     )
 
 
