@@ -728,9 +728,10 @@ class FarmingRuntime:
     def auto_level_spot(self) -> LevelSpot | None:
         """Best spot, or story repair when SCW is rejected.
 
-        The SCW gate is authoritative: an accepted 7985 means farm r9
-        immediately; a rejected 7985 suspends leveling to the first missing
-        Seven Circles step. Before either signal arrives, keep Skua brackets.
+        The SCW gate is authoritative: an accepted 7977 means the farming chain
+        is unlocked, so farm sevencircleswar r9 immediately; a rejected 7977
+        suspends leveling to the first missing Seven Circles step. Before either
+        signal arrives, keep Skua brackets.
         """
         try:
             from .scw import SCWDependencyPlanner, SCW_GATE_QUEST
@@ -757,7 +758,12 @@ class FarmingRuntime:
         return self.auto_level_spot()
 
     def _probe_scw_gate(self) -> None:
-        """Ask whether the optimal SCW quest gate is available, without moving."""
+        """Ask whether the SCW gate quest (7977 Ava-risky Business) is available.
+
+        Sending acceptQuest(7977) without moving reveals whether the prerequisite
+        chain is complete.  The response feeds back into quest_state and the next
+        auto_level_spot() call picks the correct spot.
+        """
         from .scw import SCW_GATE_QUEST
 
         status = self.quest_state.status(SCW_GATE_QUEST)

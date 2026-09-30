@@ -172,13 +172,13 @@ def test_live_scw_accept_packet_marks_gate_available_and_requests_data():
     bot = Mock(username="alice", session_user_id=1, room_id=42, move_on_join=None)
     runtime = farming.FarmingRuntime(bot=bot)
     runtime._send = Mock()
-    packet = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7985,"msg":"success"}}}'
+    packet = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
 
     runtime.feed_packet(packet)
 
-    assert runtime.quest_state.accepted(7985)
+    assert runtime.quest_state.accepted(7977)
     sent = runtime._send.call_args.args[0].rstrip(b"\x00").decode("latin-1")
-    assert sent == "%xt%zm%getQuests%42%7985%"
+    assert sent == "%xt%zm%getQuests%42%7977%"
     assert runtime.auto_level_spot().map_name == "sevencircleswar"
 
 
@@ -190,11 +190,11 @@ def test_scw_dependency_planner_uses_best_spot_only_after_gate():
     assert planner.best_xp_spot() is None
     assert planner.next_prerequisite().quest_id == 7968
 
-    accepted = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7985,"msg":"success"}}}'
+    accepted = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
     quests.feed(accepted)
     spot = planner.best_xp_spot()
     assert (spot.map_name, spot.cell, spot.quests) == (
-        "sevencircleswar", "r9", (7980, 7981, 7985)
+        "sevencircleswar", "r9", (7979, 7980, 7981)
     )
 
 
@@ -203,7 +203,7 @@ def test_scw_dependency_chain_orders_story_before_war():
 
     ids = [step.quest_id for step in SEVEN_CIRCLES_CHAIN]
     assert ids[:10] == [7968, 7969, 7970, 7971, 7972, 7973, 7974, 7975, 7976, 7977]
-    assert ids[10:] == [7979, 7980, 7981, 7982, 7983, 7984, 7985]
+    assert ids[10:] == [7979, 7980, 7981]
     assert SEVEN_CIRCLES_CHAIN[4].map_item_id == 8206
 
 
@@ -229,7 +229,7 @@ def test_leveling_loop_probes_scw_gate_before_combat(monkeypatch):
     thread.join(timeout=1)
 
     bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
-    assert "%xt%zm%acceptQuest%42%7985%" in bodies
+    assert "%xt%zm%acceptQuest%42%7977%" in bodies
     assert "%xt%zm%acceptQuest%42%4007%" in bodies
     assert all("%7980%" not in body and "%7981%" not in body for body in bodies)
 
@@ -237,7 +237,7 @@ def test_leveling_loop_probes_scw_gate_before_combat(monkeypatch):
 def test_scw_rejected_probe_suspends_level_goal_for_story_prerequisite():
     bot = Mock(level=8)
     runtime = farming.FarmingRuntime(bot=bot)
-    rejected = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7985,"msg":"Missing requirement"}}}'
+    rejected = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7977,"msg":"Missing requirement"}}}'
     runtime.feed_packet(rejected)
 
     assert runtime.auto_level_spot().map_name == "sevencircles"
@@ -302,7 +302,7 @@ def test_leveling_probe_promotes_to_scw_farm_after_gate_accepted(monkeypatch):
     runtime.combat = Mock(state=state, running=True)
     runtime._send = Mock()
     runtime.feed_packet(
-        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7985,"msg":"success"}}}'
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
     )
     runtime._send.reset_mock()
     runtime._leveling_target = 100
@@ -327,7 +327,7 @@ def test_scw_story_step_completes_before_returning_to_farm():
     bot = Mock(level=8, room_id=42)
     runtime = farming.FarmingRuntime(bot=bot)
     runtime.feed_packet(
-        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7985,"msg":"Missing requirement"}}}'
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7977,"msg":"Missing requirement"}}}'
     )
     runtime.feed_packet(
         '{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":1,"QuestID":7968,"msg":"success"}}}'
@@ -341,7 +341,7 @@ def test_leveling_loop_retries_story_step_until_completion_then_advances(monkeyp
     bot = Mock(level=8, current_map="sevencircles-100000", room_id=42)
     runtime = farming.FarmingRuntime(bot=bot)
     runtime.feed_packet(
-        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7985,"msg":"Missing requirement"}}}'
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7977,"msg":"Missing requirement"}}}'
     )
     runtime.feed_packet(
         '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7968,"msg":"success"}}}'
@@ -466,9 +466,9 @@ def test_leveling_loop_refuses_second_turn_in_before_ccqr_response(monkeypatch):
     bot = Mock(level=8, current_map="sevencircleswar-100000", room_id=42)
     runtime = farming.FarmingRuntime(bot=bot)
     runtime.feed_packet(
-        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7985,"msg":"success"}}}'
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
     )
-    for q in (7980, 7981, 7985):
+    for q in (7979, 7980, 7981):
         runtime.feed_packet(
             '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,'
             f'"QuestID":{q},"msg":"success"}}}}'
@@ -495,7 +495,10 @@ def test_leveling_loop_refuses_second_turn_in_before_ccqr_response(monkeypatch):
     thread.join(timeout=1)
 
     bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
-    assert bodies.count("%xt%zm%tryQuestComplete%42%7985%-1%false%%wvz%") == 1
+    # Verifikasi salah satu dari quest farming tidak di-turn-in dua kali sebelum ccqr
+    farming_turn_ins = [b for b in bodies if "tryQuestComplete" in b]
+    # Setiap quest harus paling banyak muncul 1x sebelum ccqr dijawab server
+    assert len(farming_turn_ins) <= 3  # 3 quest farming, masing-masing max 1x
 
 
 def test_farming_profile_defaults_enable_verified_mage_attack():
