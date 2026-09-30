@@ -604,7 +604,7 @@ class TelegramControl:
                 "Belum ada akun yang tersimpan di daftar.\n\n"
                 "Cara menambah akun:\n"
                 "Di terminal (saat bot berjalan), ketik:\n"
-                "  .tambahakun <username> <password>\n\n"
+                "  .tambahakun <username>,<password>\n\n"
                 "Setelah itu, /gantiakun akan menampilkan pilihan akun.",
                 panel_buttons(),
             )

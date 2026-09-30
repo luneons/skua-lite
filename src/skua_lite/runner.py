@@ -511,7 +511,7 @@ def run_multi(
     if not usernames:
         print(
             "[MULTI] belum ada akun tersimpan. Jalankan mode farming tunggal, "
-            "lalu gunakan .tambahakun <username> <password>.",
+            "lalu gunakan .tambahakun <username>,<password>.",
             file=sys.stderr,
         )
         return 2

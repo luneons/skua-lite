@@ -265,7 +265,10 @@ def print_farm_help() -> None:
     print("INFO")
     print("  .status / .area / .dapat <item> / .wiki <item|lokasi|quest> / .resep <item>")
     print("  .saranfarm <monster>        -> cari map monster dari wiki")
-    print("  .tambahakun <user> <pass>   -> simpan akun terenkripsi untuk Telegram")
+    print("  .tambahakun <user>,<pass>   -> simpan akun baru (koma agar nama berspasi aman)")
+    print("  .editakun <user>,<pass baru>-> ganti password akun tersimpan")
+    print("  .hapusakun <user>           -> hapus akun dari daftar")
+    print("  .daftarakun                 -> tampilkan semua akun tersimpan")
     print("Tanpa -private = room publik; -private = room 100000.")
 
 
@@ -355,12 +358,14 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
         "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
         "weapon", "armor", "helm", "cape", "level", "leveling", "dapat", "wiki", "resep",
-        "saranfarm", "tambahakun", "kenapa", "help", "dashboard", "ui",
+        "saranfarm", "tambahakun", "editakun", "hapusakun", "daftarakun", "daftar", "kenapa", "help", "dashboard", "ui",
     }
     if action not in known:
         return "", ""
     if action == "leveling":
         action = "level"
+    if action == "daftar":
+        action = "daftarakun"
     if action == "ui":
         action = "dashboard"
     return action, (parts[1].strip() if len(parts) > 1 else "")
@@ -386,6 +391,30 @@ def _print_menu(title: str, rows: list[str], prompt: str) -> None:
         print(r)
     if prompt:
         print(f"[{title.upper()}] pilih: {prompt}")
+
+def parse_account_credentials(arg: str) -> tuple[str, str]:
+    """Parse '<username>,<password>' or '<username> <password>' (space-split fallback).
+
+    The comma separator is the canonical form and supports usernames with spaces.
+    Strips leading/trailing whitespace from both parts; raises ValueError on
+    empty username, empty password, or missing separator entirely.
+    """
+    text = str(arg or "").strip()
+    if "," in text:
+        username, _, password = text.partition(",")
+        username = username.strip()
+        password = password.strip()
+    else:
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            raise ValueError("format: .tambahakun <username>,<password>  contoh: .tambahakun user dengan spasi,katasandi")
+        username, password = parts[0].strip(), parts[1].strip()
+    if not username:
+        raise ValueError("username tidak boleh kosong")
+    if not password:
+        raise ValueError("password tidak boleh kosong")
+    return username, password
+
 
 def _farm_wiki(orch: Any):
     """Reuse one read-only Wiki handle for the lifetime of the farm session."""
@@ -588,16 +617,60 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
             else:
                 print(f"[WIKI] {suggestion}")
         elif action == "tambahakun":
-            parts = arg.split(maxsplit=1)
-            if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
-                raise ValueError("format: .tambahakun <username> <password>")
-            username, password = parts[0].strip(), parts[1].strip()
+            try:
+                username, password = parse_account_credentials(arg)
+            except ValueError as exc:
+                print(f"[AKUN] {exc}")
+                return None
             accounts = getattr(orch, "accounts", None)
             if accounts is None:
                 print("[AKUN] penyimpanan multi-akun tidak tersedia.")
                 return None
             accounts.add_account(username, password)
             print(f"[AKUN] '{username}' tersimpan terenkripsi. /gantiakun di Telegram siap.")
+        elif action == "editakun":
+            try:
+                username, password = parse_account_credentials(arg)
+            except ValueError as exc:
+                print(f"[AKUN] {exc}")
+                return None
+            accounts = getattr(orch, "accounts", None)
+            if accounts is None:
+                print("[AKUN] penyimpanan multi-akun tidak tersedia.")
+                return None
+            if username not in accounts.list_usernames():
+                print(f"[AKUN] '{username}' tidak ada. Gunakan .tambahakun dulu, atau cek ejaan via .daftarakun.")
+                return None
+            accounts.add_account(username, password)
+            print(f"[AKUN] password '{username}' diperbarui.")
+        elif action == "hapusakun":
+            username = arg.strip()
+            if not username:
+                print("[AKUN] format: .hapusakun <username>")
+                return None
+            accounts = getattr(orch, "accounts", None)
+            if accounts is None:
+                print("[AKUN] penyimpanan multi-akun tidak tersedia.")
+                return None
+            ok = accounts.remove_account(username)
+            if ok:
+                print(f"[AKUN] '{username}' berhasil dihapus.")
+            else:
+                print(f"[AKUN] '{username}' tidak ditemukan di daftar akun.")
+        elif action == "daftarakun":
+            accounts = getattr(orch, "accounts", None)
+            if accounts is None:
+                print("[AKUN] penyimpanan multi-akun tidak tersedia.")
+                return None
+            usernames = accounts.list_usernames()
+            active = getattr(accounts, "active_username", lambda: None)()
+            if not usernames:
+                print("[AKUN] belum ada akun tersimpan. Gunakan .tambahakun <user>,<pass>.")
+            else:
+                print(f"[AKUN] {len(usernames)} akun tersimpan:")
+                for u in usernames:
+                    marker = " (aktif)" if u == active else ""
+                    print(f"  {u}{marker}")
         elif action == "kenapa":
             reason = getattr(runtime, "last_reason", None)
             recovery = getattr(runtime, "last_recovery", None) or []
