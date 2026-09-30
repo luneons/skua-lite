@@ -776,9 +776,8 @@ class FarmingRuntime:
             elif not self.combat.running:
                 self.fight_all_in_map()
 
-            if dependency is not None and dependency.map_item_id > 0:
-                self.scw_story.execute_step(dependency)
-            # Quest turn-in is cheap and server-judged, so it repeats.
+            # Map-item prerequisites send one acquisition batch per loop.
+            # The ordinary repeated turn-in below is the completion signal.
             for q in spot.quests:
                 self._send(sfs.try_quest_complete_packet(self.bot.room_id, q, -1),
                            f"complete quest {q}")
