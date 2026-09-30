@@ -86,6 +86,37 @@ def _callback(data, *, user_id=555, chat_id=99, message_id=5):
 # ---------------------------------------------------------------- config
 
 
+def test_config_reads_token_and_owner_from_dotenv_file(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "SKUA_TELEGRAM_TOKEN=123:file-token\n"
+        "SKUA_TELEGRAM_OWNER_ID=987654321\n",
+        encoding="utf-8",
+    )
+
+    config = tg.TelegramConfig.from_env({}, env_file=env_file)
+
+    assert config.token == "123:file-token"
+    assert config.owner_id == 987654321
+
+
+def test_process_environment_overrides_dotenv_file(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "SKUA_TELEGRAM_TOKEN=123:file-token\n"
+        "SKUA_TELEGRAM_OWNER_ID=111\n",
+        encoding="utf-8",
+    )
+
+    config = tg.TelegramConfig.from_env(
+        {"SKUA_TELEGRAM_TOKEN": "456:process-token", "SKUA_TELEGRAM_OWNER_ID": "222"},
+        env_file=env_file,
+    )
+
+    assert config.token == "456:process-token"
+    assert config.owner_id == 222
+
+
 def test_config_reads_token_and_owner_from_env():
     config = tg.TelegramConfig.from_env({
         "SKUA_TELEGRAM_TOKEN": "123:abc",
@@ -97,21 +128,25 @@ def test_config_reads_token_and_owner_from_env():
     assert config.enabled is True
 
 
-def test_config_without_token_is_disabled():
-    config = tg.TelegramConfig.from_env({})
+def test_config_without_token_is_disabled(tmp_path):
+    empty_env = tmp_path / ".env"
+    empty_env.write_text("", encoding="utf-8")
+    config = tg.TelegramConfig.from_env({}, env_file=empty_env)
 
     assert config.enabled is False
     assert config.owner_id is None
 
 
-def test_config_rejects_non_numeric_owner_id():
+def test_config_rejects_non_numeric_owner_id(tmp_path):
+    empty_env = tmp_path / ".env"
+    empty_env.write_text("", encoding="utf-8")
     config = tg.TelegramConfig.from_env({
         "SKUA_TELEGRAM_TOKEN": "123:abc",
         "SKUA_TELEGRAM_OWNER_ID": "bukan-angka",
-    })
+    }, env_file=empty_env)
 
+    assert config.token == "123:abc"
     assert config.owner_id is None
-
 
 # ---------------------------------------------------------------- parser
 

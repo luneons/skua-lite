@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 from contextlib import redirect_stdout
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 MAX_MESSAGE_CHARS = 4096
@@ -42,10 +43,35 @@ class TelegramConfig:
         return bool(self.token)
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "TelegramConfig":
+    def from_env(
+        cls,
+        env: Mapping[str, str] | None = None,
+        *,
+        env_file: str | os.PathLike[str] = ".env",
+    ) -> "TelegramConfig":
+        """Read token + owner from .env file (lower priority) then env overrides."""
+        # Load the dotenv file first so process env can override it.
+        file_values: dict[str, str] = {}
+        path = Path(env_file)
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                key, sep, val = line.partition("=")
+                if sep:
+                    file_values[key.strip()] = val.strip().strip("'\"")
+        except OSError:
+            pass
+
+        # env kwarg takes highest priority; then os.environ; then .env file.
         values = os.environ if env is None else env
-        token = str(values.get("SKUA_TELEGRAM_TOKEN", "") or "").strip()
-        raw_owner = str(values.get("SKUA_TELEGRAM_OWNER_ID", "") or "").strip()
+
+        def value(name: str) -> str:
+            return str(values.get(name, file_values.get(name, "")) or "").strip()
+
+        token = value("SKUA_TELEGRAM_TOKEN")
+        raw_owner = value("SKUA_TELEGRAM_OWNER_ID")
         try:
             owner_id = int(raw_owner) if raw_owner else None
         except ValueError:
