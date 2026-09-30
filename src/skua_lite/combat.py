@@ -15,6 +15,7 @@ import time
 from typing import Any, Callable
 
 from . import sfs
+from .client import ConnectionFailed
 
 
 _CAPTURE_COMMANDS = {
@@ -873,7 +874,12 @@ class AutoAttackEngine:
                 targets=targets,
                 item_id=skill.item_id if skill.ref == "i1" else None,
             )
-            self.bot._send_raw(packet)
+            try:
+                self.bot._send_raw(packet)
+            except ConnectionFailed:
+                self.last_action = "koneksi putus; menunggu reconnect"
+                self._stop_event.set()
+                return False
             skill.last_used = now
             if skill.ref != "aa":
                 self._last_non_auto_action = now

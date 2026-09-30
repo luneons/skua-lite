@@ -352,6 +352,28 @@ def test_leveling_loop_retries_story_step_until_completion_then_advances(monkeyp
     assert "%xt%zm%tryQuestComplete%42%7968%-1%false%%wvz%" in bodies
 
 
+def test_combat_worker_exits_cleanly_when_socket_dies():
+    from skua_lite.client import ConnectionFailed
+    from skua_lite.combat import AutoAttackEngine, CombatState, generic_profile
+
+    bot = Mock(room_id=42, session_user_id=1)
+    bot._send_raw.side_effect = ConnectionFailed("socket belum terkoneksi (send)")
+    engine = AutoAttackEngine(
+        bot, target_name="*", class_profile=generic_profile("Mage")
+    )
+    engine.state.seen_self = True
+    engine.state.player_state = 1
+    engine.state.hp = 100
+    engine.state.class_name = "Mage"
+    engine.state.cell = "r9"
+    engine.state.skills["aa"] = farming.combat.SkillState(ref="aa", target_kind="h")
+    engine.state.monsters[15] = _fake_monster(cell="r9")
+    engine.set_auto(True)
+
+    assert engine.tick() is False
+    assert "koneksi putus" in engine.last_action
+
+
 def test_farming_profile_defaults_enable_verified_mage_attack():
     profile = farming.FarmProfile()
     assert profile.map_name == "lair-100000"
