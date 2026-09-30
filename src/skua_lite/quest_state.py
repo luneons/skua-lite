@@ -20,6 +20,7 @@ class QuestStatus:
     last_message: str = ""
     data: dict[str, Any] = field(default_factory=dict)
     turn_in_pending: bool = False
+    turn_in_blocked: bool = False
     last_turn_in_success: bool | None = None
     last_turn_in_at: float = 0.0
 
@@ -29,6 +30,7 @@ class QuestState:
 
     def __init__(self) -> None:
         self._quests: dict[int, QuestStatus] = {}
+        self._item_qty: dict[int, int] = {}  # ItemID -> qty terakhir dari addItems/getDrop
 
     def status(self, quest_id: int) -> QuestStatus:
         qid = int(quest_id)
@@ -70,10 +72,38 @@ class QuestState:
                 expired.append(qid)
         return expired
 
-    def turn_in_ready(self, quest_id: int, cooldown_s: float, now: float | None = None) -> bool:
-        """True bila boleh kirim turn-in: tidak menunggu respons dan cooldown lewat."""
+    def can_turn_in(self, quest_id: int) -> bool:
+        """True jika syarat quest terpenuhi dan tidak sedang diblokir.
+
+        Bila turnin items didefinisikan dalam data getQuests, pastikan jumlahnya cukup.
+        Bila diblokir oleh penolakan ccqr (Missing Quest Progress), kembalikan False
+        sampai ada drop/addItems baru.
+        """
         status = self.status(quest_id)
-        if status.turn_in_pending:
+        if status.turn_in_blocked:
+            return False
+        data = status.data
+        if not data:
+            return True
+        turnin = data.get("turnin") or []
+        if isinstance(turnin, list) and turnin:
+            for req in turnin:
+                if not isinstance(req, dict):
+                    continue
+                item_id = _int(req.get("ItemID"))
+                req_qty = _int(req.get("iQty"), default=1)
+                if item_id > 0:
+                    current = self._item_qty.get(item_id, 0)
+                    if current < req_qty:
+                        return False
+        return True
+
+    def turn_in_ready(self, quest_id: int, cooldown_s: float, now: float | None = None) -> bool:
+        """True bila boleh kirim turn-in: syarat lengkap, tidak pending, dan cooldown lewat."""
+        status = self.status(quest_id)
+        if status.turn_in_pending or status.turn_in_blocked:
+            return False
+        if not self.can_turn_in(quest_id):
             return False
         stamp = float(now if now is not None else time.monotonic())
         return (stamp - status.last_turn_in_at) >= float(cooldown_s)
@@ -108,8 +138,31 @@ class QuestState:
                 status = self.status(qid)
                 status.accepted = True
                 status.data = dict(raw)
+                # Reset turn_in_blocked bila data quest baru datang
+                status.turn_in_blocked = False
                 changed = True
             return changed
+        if cmd == "addItems":
+            items = obj.get("items") or {}
+            if isinstance(items, dict):
+                for k, it in items.items():
+                    if isinstance(it, dict):
+                        iid = _int(it.get("ItemID") or k)
+                        qty_now = _int(it.get("iQtyNow") or it.get("iQty"))
+                        if iid > 0 and qty_now > 0:
+                            self._item_qty[iid] = qty_now
+                            # Progress item bertambah -> izinkan re-evaluasi turn-in
+                            for st in self._quests.values():
+                                st.turn_in_blocked = False
+            return True
+        if cmd == "getDrop":
+            iid = _int(obj.get("ItemID"))
+            qty = _int(obj.get("iQty"), default=1)
+            if iid > 0:
+                self._item_qty[iid] = self._item_qty.get(iid, 0) + qty
+                for st in self._quests.values():
+                    st.turn_in_blocked = False
+            return True
         if cmd == "ccqr":
             qid = _int(obj.get("QuestID"))
             if qid <= 0:
@@ -121,6 +174,12 @@ class QuestState:
             if status.last_turn_in_success:
                 status.complete = True
                 status.accepted = False
+                status.turn_in_blocked = False
+            else:
+                # Jika ditolak Missing Quest Progress / item kurang, tahan turn-in sampai item drop baru tiba
+                msg_lower = status.last_message.lower()
+                if "progress" in msg_lower or "item" in msg_lower or "syarat" in msg_lower:
+                    status.turn_in_blocked = True
             return True
         return False
 

@@ -66,6 +66,11 @@ _ITEMS_RES = (
     re.compile(r"need\s+.+\s+item", re.IGNORECASE),
     re.compile(r"butuh\s+.+\s+item", re.IGNORECASE),
     re.compile(r"item\s+kurang", re.IGNORECASE),
+    # AQW turn-in pesan saat kill/progress quest belum cukup
+    re.compile(r"missing\s+quest\s+progress", re.IGNORECASE),
+    re.compile(r"quest\s+progress", re.IGNORECASE),
+    re.compile(r"progress.*not.*complete", re.IGNORECASE),
+    re.compile(r"not.*completed.*yet", re.IGNORECASE),
 )
 _REP_RES = (
     re.compile(r"reputa", re.IGNORECASE),
