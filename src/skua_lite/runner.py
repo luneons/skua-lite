@@ -497,13 +497,129 @@ def _admin_status(bot: bot_mod.AQWBot | None) -> str:
 
 
 
+def prompt_farming_account_flow(account_store: "MultiAccountStore") -> tuple:
+    """Menu interaktif sebelum login: single atau multi, tambah akun, pilih akun.
+
+    Return (mode, selected):
+      - ("single", [username])   -> login 1 akun tersimpan
+      - ("single", None)         -> kredensial baru (caller panggil obtain_credentials)
+      - ("multi", [usernames])   -> login subset/multi akun
+    """
+    while True:
+        usernames = account_store.list_usernames()
+        print("\nAKUN FARMING")
+        if usernames:
+            print("  Akun tersimpan:")
+            for i, name in enumerate(usernames, 1):
+                print(f"    [{i}] {name}")
+            print("")
+            print("  [1] Single-bot  (jalankan 1 akun)")
+            print("  [2] Multi-bot   (jalankan beberapa akun sekaligus)")
+            print("  [+] Tambah akun baru")
+            print("")
+            choice = input("Pilih [1/2/+]: ").strip().lower()
+        else:
+            print("  (belum ada akun tersimpan)")
+            print("")
+            print("  [+] Tambah akun baru sekarang")
+            print("  [0] Masuk langsung (kredensial baru)")
+            print("")
+            choice = input("Pilih [+/0]: ").strip().lower()
+            if choice in {"0", "baru", "b", "langsung", "masuk"}:
+                return ("single", None)
+            # Default ke tambah akun
+            _prompt_add_account(account_store)
+            continue
+
+        # ----- tambah akun dulu, lalu ulang menu -----
+        if choice in {"+", "tambah", "tambah akun", "t"}:
+            _prompt_add_account(account_store)
+            continue
+
+        # ----- single -----
+        if choice in {"1", "single", "satu"}:
+            while True:
+                pick = input(
+                    f"Pilih akun [1-{len(usernames)}] atau 'baru' untuk kredensial segar "
+                    f"[{1 if len(usernames) == 1 else 'nomor'}]: "
+                ).strip().lower()
+                if pick in {"baru", "new", "b", "0"}:
+                    return ("single", None)
+                if pick == "":
+                    pick = "1"
+                try:
+                    idx = int(pick)
+                except ValueError:
+                    print("[WARN] Pilihan tidak dikenal. Masukkan nomor, atau 'baru'.")
+                    continue
+                if 1 <= idx <= len(usernames):
+                    return ("single", [usernames[idx - 1]])
+                print(f"[WARN] Nomor tidak ada. Pilih 1-{len(usernames)}.")
+
+        # ----- multi -----
+        if choice in {"2", "multi", "m", "banyak"}:
+            names_line = ", ".join(f"[{i + 1}] {n}" for i, n in enumerate(usernames))
+            print(f"  Akun: {names_line}")
+            while True:
+                pick = input("Pilih akun (misal: 1,3 atau 'semua') [semua]: ").strip().lower()
+                if pick in {"", "semua", "all", "a", "*"}:
+                    return ("multi", list(usernames))
+                parts = [p.strip() for p in pick.replace(";", ",").split(",") if p.strip()]
+                chosen: list = []
+                bad: list = []
+                seen: set = set()
+                for part in parts:
+                    if part in usernames and part not in seen:
+                        chosen.append(part)
+                        seen.add(part)
+                        continue
+                    try:
+                        idx = int(part)
+                    except ValueError:
+                        bad.append(part)
+                        continue
+                    if 1 <= idx <= len(usernames):
+                        name = usernames[idx - 1]
+                        if name not in seen:
+                            chosen.append(name)
+                            seen.add(name)
+                    else:
+                        bad.append(part)
+                if bad or not chosen:
+                    bad_txt = f" ({', '.join(bad)})" if bad else ""
+                    print(f"[WARN] Pilihan tidak valid{bad_txt}. Coba lagi.")
+                    continue
+                return ("multi", chosen)
+
+        print("[WARN] Pilihan tidak dikenal. Masukkan 1, 2, atau +.")
+
+
+def _prompt_add_account(account_store: "MultiAccountStore") -> None:
+    """Minta username,password via prompt aman (password disembunyikan)."""
+    print("\n[TAMBAH AKUN] format: <username>,<password>")
+    print("  (username boleh mengandung spasi; password tidak ditampilkan)")
+    raw_user = input("  Username : ").strip()
+    if not raw_user:
+        print("[AKUN] username kosong, dibatalkan.")
+        return
+    import getpass as _getpass
+
+    password = _getpass.getpass("  Password : ").strip()
+    if not password:
+        print("[AKUN] password kosong, dibatalkan.")
+        return
+    account_store.add_account(raw_user, password)
+    print(f"[AKUN] '{raw_user}' tersimpan terenkripsi. Silakan pilih lagi.\n")
+
+
 def run_multi(
     server_name: str = config.DEFAULT_SERVER,
     target_map: str | None = None,
     *,
     accounts: MultiAccountStore | None = None,
+    selected_usernames: list[str] | None = None,
 ) -> int:
-    """Login semua akun tersimpan dan kontrol sebagai satu kelompok farming."""
+    """Login akun tersimpan (atau subset terpilih) sebagai satu kelompok farming."""
     from .multi_session import MultiOrchestrator
 
     account_store = accounts or MultiAccountStore()
@@ -515,6 +631,12 @@ def run_multi(
             file=sys.stderr,
         )
         return 2
+    if selected_usernames is not None:
+        wanted = {u.casefold() for u in selected_usernames}
+        usernames = [u for u in usernames if u.casefold() in wanted]
+        if not usernames:
+            print("[MULTI] tidak ada akun terpilih yang cocok.", file=sys.stderr)
+            return 2
 
     group = MultiOrchestrator(accounts=account_store, server_name=server_name)
     failures: list[str] = []
@@ -571,6 +693,50 @@ def run(server_name: str = config.DEFAULT_SERVER, target_map: str | None = None,
             print("[ABORT] --multi hanya tersedia untuk mode farming.", file=sys.stderr)
             return 2
         return run_multi(server_name=server_name, target_map=target_map)
+    # Farming mode: interaktif — tanya single/multi dulu sebelum login
+    if selected is RunMode.FARMING and not multi:
+        account_store = MultiAccountStore()
+        mode_choice, selected_users = prompt_farming_account_flow(account_store)
+        if mode_choice == "multi":
+            return run_multi(
+                server_name=server_name,
+                target_map=target_map,
+                accounts=account_store,
+                selected_usernames=selected_users,
+            )
+        # single dengan akun tersimpan
+        if mode_choice == "single" and selected_users is not None:
+            username = selected_users[0]
+            try:
+                _u, password = account_store.load(username)
+            except Exception as exc:
+                print(f"\n[FATAL] gagal baca kredensial '{username}': {exc}", file=sys.stderr)
+                return 1
+            slot_store = credentials.CredentialStore(
+                base_dir=account_store.base_dir / "slots" / username
+            )
+            slot_store.save(username, password)
+            orch = Orchestrator(server_name=server_name, target_map=target_map,
+                                store=slot_store, mode=selected)
+            try:
+                orch.connect(username, password)
+            except (login.LoginFailed, servers.ServerUnavailable, bot_mod.BotError) as e:
+                print(f"\n[FATAL] {e}", file=sys.stderr)
+                orch.shutdown()
+                return 1
+            except RuntimeError as e:
+                print(f"\n[ABORT] {e}", file=sys.stderr)
+                return 2
+            try:
+                started = orch.start_telegram_control()
+                if not started:
+                    print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
+                cli.farm_menu_loop(orch)
+            finally:
+                orch.shutdown()
+            return 0
+        # single dengan kredensial baru (selected_users is None)
+
     orch = Orchestrator(server_name=server_name, target_map=target_map,
                         store=store, mode=selected)
     try:

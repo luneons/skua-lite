@@ -76,13 +76,20 @@ def test_orchestrator_default_target_depends_on_selected_mode(tmp_path):
     assert farming.target_map != assistant.target_map
 
 
-def test_run_prompts_for_mode_before_credentials(monkeypatch):
+def test_run_prompts_for_account_flow_before_credentials(monkeypatch):
     calls: list[str] = []
 
     monkeypatch.setattr(
         runner,
         "select_mode",
         lambda explicit=None: calls.append("mode") or RunMode.FARMING,
+    )
+    fake_accounts = object()
+    monkeypatch.setattr(runner, "MultiAccountStore", lambda: fake_accounts)
+    monkeypatch.setattr(
+        runner,
+        "prompt_farming_account_flow",
+        lambda store: calls.append("account_flow") or ("single", None),
     )
 
     class FakeOrchestrator:
@@ -100,4 +107,28 @@ def test_run_prompts_for_mode_before_credentials(monkeypatch):
     monkeypatch.setattr(runner, "Orchestrator", FakeOrchestrator)
 
     assert runner.run(mode=None) == 2
-    assert calls[:3] == ["mode", "init:farming", "credentials"]
+    assert calls[:4] == ["mode", "account_flow", "init:farming", "credentials"]
+
+
+def test_run_routes_selected_accounts_to_multi(monkeypatch):
+    selected = ["demo-one", "demo-three"]
+    fake_accounts = object()
+    observed = {}
+
+    monkeypatch.setattr(runner, "select_mode", lambda explicit=None: RunMode.FARMING)
+    monkeypatch.setattr(runner, "MultiAccountStore", lambda: fake_accounts)
+    monkeypatch.setattr(
+        runner,
+        "prompt_farming_account_flow",
+        lambda store: ("multi", selected),
+    )
+
+    def fake_run_multi(**kwargs):
+        observed.update(kwargs)
+        return 17
+
+    monkeypatch.setattr(runner, "run_multi", fake_run_multi)
+
+    assert runner.run(mode=RunMode.FARMING) == 17
+    assert observed["accounts"] is fake_accounts
+    assert observed["selected_usernames"] == selected
