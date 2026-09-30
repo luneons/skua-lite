@@ -123,6 +123,18 @@ def test_aggro_mon_packet_wire_format():
     assert _wire(sfs.aggro_mon_packet(room=273, map_ids=[7, 9])) == "%xt%zm%aggroMon%273%7%9%"
 
 
+def test_quest_state_tracks_failed_turn_in_response():
+    state = QuestState()
+    state.note_turn_in_sent(7980)
+    failed = '{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":0,"QuestID":7980,"msg":"Required items missing"}}}'
+
+    assert state.feed(failed)
+    status = state.status(7980)
+    assert status.turn_in_pending is False
+    assert status.last_turn_in_success is False
+    assert status.last_message == "Required items missing"
+
+
 def test_quest_state_tracks_accept_reject_and_completion():
     state = QuestState()
     ok = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7980,"msg":"success"}}}'
@@ -331,6 +343,9 @@ def test_leveling_loop_retries_story_step_until_completion_then_advances(monkeyp
     runtime.feed_packet(
         '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7985,"msg":"Missing requirement"}}}'
     )
+    runtime.feed_packet(
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7968,"msg":"success"}}}'
+    )
     state = Mock(cell="Enter", map_file_name="sevencircles.swf")
     runtime.combat = Mock(state=state, running=True)
     runtime._send = Mock()
@@ -372,6 +387,115 @@ def test_combat_worker_exits_cleanly_when_socket_dies():
 
     assert engine.tick() is False
     assert "koneksi putus" in engine.last_action
+
+
+def test_quest_state_turn_in_waits_for_authoritative_response():
+    state = QuestState()
+    assert state.turn_in_ready(7980, cooldown_s=15.0, now=100.0)
+    state.note_turn_in_sent(7980, now=100.0)
+    assert not state.turn_in_ready(7980, cooldown_s=15.0, now=101.0)
+    state.feed('{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":0,"QuestID":7980,"msg":"not enough"}}}')
+    assert not state.turn_in_ready(7980, cooldown_s=15.0, now=110.0)
+    assert state.turn_in_ready(7980, cooldown_s=15.0, now=116.0)
+
+
+def test_leveling_reapplies_map_wide_combat_on_targetless_spot():
+    bot = Mock(level=8, current_map="sevencircleswar-1", room_id=42)
+    runtime = farming.FarmingRuntime(bot=bot)
+    runtime.combat = Mock(state=Mock(cell="r9", map_file_name="scw.swf"), running=True)
+    runtime.combat.set_map_wide = Mock()
+    runtime.combat.start = Mock()
+    runtime._send = Mock()
+    runtime._leveling_target = 100
+    runtime._leveling_stop.set()
+    runtime.fight_all_in_map()
+    runtime.combat.set_map_wide.assert_called_with(True)
+
+
+def test_runtime_logs_authoritative_quest_turn_in_result():
+    bot = Mock(level=8, room_id=42)
+    logs: list[str] = []
+    runtime = farming.FarmingRuntime(bot=bot, on_log=logs.append)
+    runtime.quest_state.note_turn_in_sent(7980, now=100.0)
+
+    runtime.feed_packet('{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":0,"QuestID":7980,"msg":"Required items missing"}}}')
+
+    assert any("turn-in 7980 GAGAL: Required items missing" in line for line in logs)
+    assert runtime.quest_state.status(7980).turn_in_pending is False
+
+
+def test_leveling_does_not_turn_in_quests_rejected_by_server(monkeypatch):
+    import threading
+
+    bot = Mock(level=8, current_map="oaklore-1", room_id=42)
+    runtime = farming.FarmingRuntime(bot=bot)
+    for q in (4007, 6257):
+        runtime.feed_packet(
+            '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,'
+            f'"QuestID":{q},"msg":"Missing requirement"}}}}'
+        )
+    runtime.combat = Mock(state=Mock(cell="r3", map_file_name="oaklore.swf"), running=True)
+    runtime._send = Mock()
+    runtime._leveling_target = 100
+    runtime._leveling_stop.clear()
+    runtime._leveling_probe_done = True
+
+    old_sleep = time.sleep
+    monkeypatch.setattr(time, "sleep", lambda _s: old_sleep(0.02))
+    thread = threading.Thread(target=runtime._leveling_loop)
+    thread.start()
+    old_sleep(0.15)
+    runtime._leveling_stop.set()
+    thread.join(timeout=1)
+
+    bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
+    assert not any("tryQuestComplete" in body for body in bodies)
+
+
+def test_quest_state_expires_lost_turn_in_after_timeout():
+    state = QuestState()
+    state.note_turn_in_sent(7980, now=100.0)
+    assert state.expire_pending_turn_ins(timeout_s=60.0, now=150.0) == []
+    assert state.expire_pending_turn_ins(timeout_s=60.0, now=161.0) == [7980]
+    assert state.turn_in_ready(7980, cooldown_s=15.0, now=161.0)
+
+
+def test_leveling_loop_refuses_second_turn_in_before_ccqr_response(monkeypatch):
+    import threading
+
+    bot = Mock(level=8, current_map="sevencircleswar-100000", room_id=42)
+    runtime = farming.FarmingRuntime(bot=bot)
+    runtime.feed_packet(
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7985,"msg":"success"}}}'
+    )
+    for q in (7980, 7981, 7985):
+        runtime.feed_packet(
+            '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,'
+            f'"QuestID":{q},"msg":"success"}}}}'
+        )
+    state = Mock(cell="r9", map_file_name="sevencircleswar.swf")
+    runtime.combat = Mock(state=state, running=True)
+    runtime.combat.set_map_wide = Mock()
+    runtime.combat.start = Mock()
+    runtime._send = Mock()
+    runtime._leveling_target = 100
+    runtime._leveling_stop.clear()
+
+    old_sleep = time.sleep
+    monkeypatch.setattr(time, "sleep", lambda s: old_sleep(0.02))
+    thread = threading.Thread(target=runtime._leveling_loop)
+    thread.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if runtime._send.called:
+            old_sleep(0.15)  # let the loop tick twice more without ccqr
+            break
+        old_sleep(0.02)
+    runtime._leveling_stop.set()
+    thread.join(timeout=1)
+
+    bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
+    assert bodies.count("%xt%zm%tryQuestComplete%42%7985%-1%false%%wvz%") == 1
 
 
 def test_farming_profile_defaults_enable_verified_mage_attack():

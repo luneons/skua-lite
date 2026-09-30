@@ -145,20 +145,37 @@ class FarmingRuntime:
             except Exception:
                 pass
             try:
-                changed = self.quest_state.feed(packet)
+                parsed = sfs.parse_xt_json(packet)
+                if parsed is None:
+                    changed = self.quest_state.feed(packet)
+                    cmd = ""
+                    obj = {}
+                else:
+                    cmd = str(parsed.get("cmd") or "")
+                    obj = parsed.get("obj") or {}
+                    changed = self.quest_state.feed(packet)
             except Exception:
                 changed = False
             if changed:
-                parsed = sfs.parse_xt_json(packet)
-                if parsed is not None and parsed.get("cmd") == "acceptQuest":
-                    obj = parsed.get("obj") or {}
-                    if int(obj.get("bSuccess", 0) or 0) == 1:
-                        quest_id = int(obj.get("QuestID", 0) or 0)
-                        if quest_id > 0:
-                            self._send(
-                                sfs.get_quests_packet(self.bot.room_id, quest_id),
-                                f"muat quest {quest_id}",
-                            )
+                if cmd == "acceptQuest":
+                    quest_id = int(obj.get("QuestID", 0) or 0)
+                    success = int(obj.get("bSuccess", 0) or 0) == 1
+                    message = str(obj.get("msg") or "")
+                    self._on_log(
+                        f"[QUEST] accept {quest_id} {'berhasil' if success else 'gagal'}"
+                        + (f": {message}" if message else "")
+                    )
+                    if success and quest_id > 0:
+                        self._send(sfs.get_quests_packet(self.bot.room_id, quest_id),
+                                   f"muat quest {quest_id}")
+                elif cmd == "ccqr":
+                    quest_id = int(obj.get("QuestID", 0) or 0)
+                    success = int(obj.get("bSuccess", 0) or 0) == 1
+                    message = str(obj.get("msg") or "")
+                    self._on_log(
+                        f"[QUEST] turn-in {quest_id} {'BERHASIL' if success else 'GAGAL'}"
+                        + (f": {message}" if message else " (server menolak/tidak memenuhi syarat)")
+                    )
             self._scan_map_cells_if_changed()
 
     def _sync_class_profile(self) -> None:
@@ -799,7 +816,11 @@ class FarmingRuntime:
             if spot_key != self._leveling_spot:
                 self._leveling_spot = spot_key
                 self._leveling_quests.clear()
+            # Never treat a server-rejected acceptance as an active quest.
             for q in spot.quests:
+                status = self.quest_state.status(q)
+                if status.accepted is False and not status.turn_in_pending:
+                    continue
                 if q not in self._leveling_quests:
                     self._leveling_quests.add(q)
                     self._send(sfs.accept_quest_packet(self.bot.room_id, q),
@@ -810,19 +831,33 @@ class FarmingRuntime:
             if dependency is not None and dependency.map_item_id > 0:
                 self.scw_story.execute_step(dependency)
             elif spot.target and spot.target != "*":
-                self.combat.set_target(spot.target)
                 self.combat.set_map_wide(False)
+                self.combat.set_target(spot.target)
                 self.combat.set_auto(False)
                 if not self.combat.running:
                     self.combat.start()
-            elif not self.combat.running:
+            else:
+                # Re-apply on every newly selected spot/map: a still-running
+                # engine may be carrying the previous map's named target.
                 self.fight_all_in_map()
 
-            # Map-item prerequisites send one acquisition batch per loop.
-            # The ordinary repeated turn-in below is the completion signal.
+            # Turn-ins wait for the server's authoritative ccqr. A dropped
+            # pending slot (no ccqr in 60s, e.g. disconnect) retries honestly.
+            for qid in self.quest_state.expire_pending_turn_ins(timeout_s=60.0):
+                self._on_log(f"[QUEST] turn-in {qid} timeout tanpa ccqr; boleh coba lagi")
+            # Only send a turn-in when no request is awaiting the server's
+            # authoritative ccqr response, and only for quests the server has
+            # accepted. Story-executed turn-ins report through the same slot,
+            # so failed accepts still block retries via turn_in_ready.
             for q in spot.quests:
-                self._send(sfs.try_quest_complete_packet(self.bot.room_id, q, -1),
-                           f"complete quest {q}")
+                if self.quest_state.completed(q):
+                    continue
+                if not self.quest_state.accepted(q):
+                    continue
+                if self.quest_state.turn_in_ready(q, cooldown_s=15.0):
+                    self.quest_state.note_turn_in_sent(q)
+                    self._send(sfs.try_quest_complete_packet(self.bot.room_id, q, -1),
+                               f"kirim turn-in quest {q}; menunggu ccqr")
 
             time.sleep(3.0)
 
