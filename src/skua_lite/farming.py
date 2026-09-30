@@ -89,6 +89,7 @@ class FarmingRuntime:
         self._leveling_spot: tuple[str, str] | None = None
         self.leveling_dependency = None
         self._leveling_probe_done = False
+        self._probe_wait_s = 3.0
         self._leveling_private = False
         self._auto_private = False
         # Full item picture (inventory + bank, every type), separate from the
@@ -816,7 +817,23 @@ class FarmingRuntime:
         return thread is not None and thread.is_alive()
 
     def _leveling_loop(self) -> None:
+        # Tunggu probe pertama 7981 selesai sebelum memilih spot awal
+        # sehingga bot tidak salah join bracket lalu harus pindah lagi.
+        _probe_waited = 0.0
+        self._probe_scw_gate()
+        while _probe_waited < self._probe_wait_s and not self._leveling_stop.is_set():
+            if self.quest_state.status(7981).accepted is not None:
+                break
+            time.sleep(0.5)
+            _probe_waited += 0.5
+
         while not self._leveling_stop.is_set():
+            # Jangan berpindah map saat bot masih sedang dalam proses join
+            from .bot import BotState as _BotState
+            if getattr(self.bot, "state", None) is _BotState.JOINING_MAP:
+                time.sleep(0.5)
+                continue
+
             current = int(getattr(self.bot, "level", 1) or 1)
             goal = int(self._leveling_target or 0)
             if goal <= 0 or current >= goal:

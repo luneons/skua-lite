@@ -384,6 +384,8 @@ def test_leveling_loop_survives_join_bot_error(monkeypatch):
     bot = _bot()
     bot.level = 22
     bot.current_map = "battleon-1"
+    from skua_lite.bot import BotState
+    bot.state = BotState.IN_MAP  # pastikan tidak stuck di guard JOINING_MAP
     runtime = FarmingRuntime(bot=bot)
     
     # Track calls and force exception on first join
@@ -397,6 +399,7 @@ def test_leveling_loop_survives_join_bot_error(monkeypatch):
     runtime.join = fake_join
     runtime.combat.start = Mock()
     runtime.combat.stop = Mock()
+    runtime._probe_wait_s = 0.0
     runtime._leveling_target = 100
     runtime._leveling_stop.clear()
     

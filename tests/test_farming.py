@@ -220,11 +220,14 @@ def test_scw_dependency_chain_orders_story_before_war():
 def test_leveling_loop_probes_scw_gate_before_combat(monkeypatch):
     import threading
 
-    bot = Mock(level=8, current_map="sevencircleswar-100000", room_id=42)
+    from skua_lite.bot import BotState
+    bot = Mock(level=8, current_map="sevencircleswar-100000", room_id=42, state=BotState.IN_MAP)
     runtime = farming.FarmingRuntime(bot=bot)
     state = Mock(cell="r9", map_file_name="sevencircleswar.swf")
     runtime.combat = Mock(state=state, running=True)
     runtime._send = Mock()
+    runtime._probe_wait_s = 0.0  # jangan tunggu dalam test
+    runtime._probe_wait_s = 0.0  # jangan tunggu dalam test
     runtime._leveling_target = 100
     runtime._leveling_stop.clear()
 
@@ -309,7 +312,8 @@ def test_story_executor_completes_only_finished_requirements():
 def test_leveling_probe_promotes_to_scw_farm_after_gate_accepted(monkeypatch):
     import threading
 
-    bot = Mock(level=8, current_map="sevencircleswar-100000", room_id=42)
+    from skua_lite.bot import BotState
+    bot = Mock(level=8, current_map="sevencircleswar-100000", room_id=42, state=BotState.IN_MAP)
     runtime = farming.FarmingRuntime(bot=bot)
     state = Mock(cell="r9", map_file_name="sevencircleswar.swf")
     runtime.combat = Mock(state=state, running=True)
@@ -319,6 +323,8 @@ def test_leveling_probe_promotes_to_scw_farm_after_gate_accepted(monkeypatch):
         '{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
     )
     runtime._send.reset_mock()
+    runtime._leveling_probe_done = True  # probe sudah dilakukan; jangan kirim ulang
+    runtime._probe_wait_s = 0.0
     runtime._leveling_target = 100
     runtime._leveling_stop.clear()
 
@@ -353,7 +359,8 @@ def test_scw_story_step_completes_before_returning_to_farm():
 def test_leveling_loop_retries_story_step_until_completion_then_advances(monkeypatch):
     import threading
 
-    bot = Mock(level=8, current_map="sevencircles-100000", room_id=42)
+    from skua_lite.bot import BotState
+    bot = Mock(level=8, current_map="sevencircles-100000", room_id=42, state=BotState.IN_MAP)
     runtime = farming.FarmingRuntime(bot=bot)
     # Probe farming 7981 ditolak → story repair
     runtime.feed_packet(
