@@ -387,7 +387,18 @@ class TelegramControl:
             return False
         return True
 
+    def _is_multi(self) -> bool:
+        return bool(getattr(self.orch, "is_multi", False))
+
     def _execute(self, action: str, arg: Any) -> str:
+        if self._is_multi():
+            try:
+                results = self.orch.broadcast(action, arg)
+            except Exception as exc:
+                return _bounded(f"Broadcast {action} gagal: {exc}")
+            if not results:
+                return "Tidak ada akun aktif."
+            return _bounded(self.orch.format_broadcast(results))
         stream = io.StringIO()
         with redirect_stdout(stream):
             result = self.run_command(self.orch, action, arg)
@@ -655,6 +666,11 @@ class TelegramControl:
             )
 
     def _panel_text(self) -> str:
+        if self._is_multi():
+            try:
+                return _bounded(self.orch.dashboard_text())
+            except Exception as exc:
+                return _bounded(f"Panel multi belum siap: {exc}")
         from .cli import farm_dashboard_lines
 
         try:

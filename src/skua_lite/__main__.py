@@ -23,11 +23,14 @@ def main(argv: list[str] | None = None) -> int:
                     help=f"nama server AQW (default: {config.DEFAULT_SERVER})")
     ap.add_argument("--map", dest="map_name", default=None,
                     help="map tujuan join (default mengikuti mode yang dipilih)")
+    ap.add_argument("--multi", action="store_true",
+                    help="mode farming: login SEMUA akun tersimpan, satu kontrol untuk semua")
     args = ap.parse_args(argv)
     return runner.run(
         server_name=args.server,
         target_map=args.map_name,
         mode=None if args.mode is None else RunMode(args.mode),
+        multi=args.multi,
     )
 
 

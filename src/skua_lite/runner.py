@@ -496,15 +496,81 @@ def _admin_status(bot: bot_mod.AQWBot | None) -> str:
     )
 
 
+
+def run_multi(
+    server_name: str = config.DEFAULT_SERVER,
+    target_map: str | None = None,
+    *,
+    accounts: MultiAccountStore | None = None,
+) -> int:
+    """Login semua akun tersimpan dan kontrol sebagai satu kelompok farming."""
+    from .multi_session import MultiOrchestrator
+
+    account_store = accounts or MultiAccountStore()
+    usernames = account_store.list_usernames()
+    if not usernames:
+        print(
+            "[MULTI] belum ada akun tersimpan. Jalankan mode farming tunggal, "
+            "lalu gunakan .tambahakun <username> <password>.",
+            file=sys.stderr,
+        )
+        return 2
+
+    group = MultiOrchestrator(accounts=account_store, server_name=server_name)
+    failures: list[str] = []
+    for username in usernames:
+        try:
+            _u, password = account_store.load(username)
+            slot_store = credentials.CredentialStore(
+                base_dir=account_store.base_dir / "slots" / username
+            )
+            slot_store.save(username, password)
+            orch = Orchestrator(
+                server_name=server_name,
+                target_map=target_map,
+                store=slot_store,
+                mode=RunMode.FARMING,
+                presence_capture_path=account_store.base_dir / f"presence_{username}.log",
+            )
+            orch.auto_relogin = True
+            print(f"[MULTI] login akun '{username}'...")
+            orch.connect(username, password)
+            group.add_slot(username, orch)
+            print(f"[MULTI] '{username}' aktif.")
+        except Exception as exc:
+            failures.append(f"{username}: {exc}")
+            print(f"[MULTI] '{username}' gagal: {exc}", file=sys.stderr)
+
+    if group.slot_count() == 0:
+        print("[MULTI] tidak ada akun yang berhasil login.", file=sys.stderr)
+        return 1
+
+    if failures:
+        print(f"[MULTI] {len(failures)} akun gagal, {group.slot_count()} akun tetap aktif.")
+
+    try:
+        started = group.start_telegram_control()
+        if not started:
+            print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
+        cli.multi_farm_menu_loop(group)
+    finally:
+        group.shutdown()
+    return 0
+
 def run(server_name: str = config.DEFAULT_SERVER, target_map: str | None = None,
         store: credentials.CredentialStore | None = None,
-        mode: str | RunMode | None = None) -> int:
-    """Entry point utama: pilih mode dulu, baru login."""
+        mode: str | RunMode | None = None, multi: bool = False) -> int:
+    """Entry point utama: pilih mode dulu, baru login (atau fan-out multi)."""
     try:
         selected = select_mode(mode)
     except ValueError as e:
         print(f"\n[ABORT] {e}", file=sys.stderr)
         return 2
+    if multi:
+        if selected is not RunMode.FARMING:
+            print("[ABORT] --multi hanya tersedia untuk mode farming.", file=sys.stderr)
+            return 2
+        return run_multi(server_name=server_name, target_map=target_map)
     orch = Orchestrator(server_name=server_name, target_map=target_map,
                         store=store, mode=selected)
     try:

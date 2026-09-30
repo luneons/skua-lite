@@ -668,6 +668,61 @@ def farm_menu_loop(orch: Any) -> None:
         dispatch(bot, act, arg2)
 
 
+def multi_farm_menu_loop(mo: Any) -> None:
+    """Loop interaktif untuk mode multi-akun (MultiOrchestrator)."""
+    n = mo.slot_count()
+    print(f"\n{'='*56}")
+    print(f"  SKUA-LITE MULTI-BOT ({n} akun aktif)")
+    print(f"{'='*56}")
+    for username, orch in mo.slots():
+        bot = getattr(orch, "bot", None)
+        state = getattr(bot, "state", "?") if bot else "OFFLINE"
+        state = getattr(state, "value", state)
+        current_map = getattr(bot, "current_map", "?") if bot else "-"
+        print(f"  [{username}] {state} | {current_map}")
+    print(f"{'='*56}")
+    print("  Semua perintah farming (.level, .join, .attack, dll) dikirim ke SEMUA akun.")
+    print("  .daftar  -> status semua akun | quit -> keluar\n")
+
+    while True:
+        try:
+            prompt = f"[multi/{n}akun] > "
+            line = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n[EXIT] Menghentikan semua bot...")
+            for _u, orch in mo.slots():
+                try:
+                    orch.bot.stop()
+                except Exception:
+                    pass
+            break
+
+        if not line:
+            continue
+
+        norm = line.strip().lower()
+
+        if norm in {"quit", "exit", "keluar"}:
+            print("[EXIT] Menutup semua bot...")
+            for _u, orch in mo.slots():
+                try:
+                    orch.bot.stop()
+                except Exception:
+                    pass
+            break
+
+        if norm in {".daftar", "daftar", "status", ".status"}:
+            print(mo.dashboard_text())
+            continue
+
+        action, arg = parse_farm_command(line)
+        if action:
+            results = mo.broadcast(action, arg)
+            print(mo.format_broadcast(results))
+        else:
+            print("[WARN] perintah tidak dikenal; ketik .help atau .daftar")
+
+
 def print_banner(bot: Any) -> None:
     print("\n" + "=" * 56)
     print("           SKUA-LITE (Python AQW Bot)             ")
