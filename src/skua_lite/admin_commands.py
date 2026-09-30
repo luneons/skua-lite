@@ -64,6 +64,7 @@ _COMMANDS = (
     "cari", "dapat", "item", "quest", "shop", "farm", "upgrade", "exec", "run",
     "join", "move", "status", "bantuan", "help", "admin",
 )
+PUBLIC_WIKI_COMMANDS = frozenset({"dapat", "item", "quest", "shop"})
 
 
 def parse_admin_command(message: str) -> tuple[str, str] | None:

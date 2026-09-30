@@ -17,7 +17,12 @@ from .ultra_guide import UltraGuide
 from .aqw_knowledge import AQWKnowledge
 from .wiki_knowledge import WikiKnowledge, default_wiki_db_path
 from .research import Researcher, parse_research_marker
-from .admin_commands import AdminCommandHandler, AdminInbox, parse_admin_command
+from .admin_commands import (
+    PUBLIC_WIKI_COMMANDS,
+    AdminCommandHandler,
+    AdminInbox,
+    parse_admin_command,
+)
 
 
 _ON_COMMAND = "MELE AI ON"
@@ -670,6 +675,15 @@ class AIChatRouter:
                 owner = sender_id == self._active_owner_id
             else:
                 owner = is_owner_account(sender)
+            # Local Wiki lookups are read-only and public. Process them before
+            # owner exclusivity; all side-effecting/admin verbs remain owner-only.
+            admin_command = parse_admin_command(text)
+            public_wiki_command = (
+                admin_command is not None
+                and admin_command[0] in PUBLIC_WIKI_COMMANDS
+            )
+            if public_wiki_command and self._admin_inbox is not None:
+                return self._admin_inbox.submit(sender, text, self._send_chat)
             if self._owner_lock and not owner:
                 return False
             if normalized == "MODE NORMAL" and owner and self._owner_lock:
@@ -680,11 +694,9 @@ class AIChatRouter:
                     "Admin mode tetap aktif"
                 )
                 return True
-            # Admin commands are the owner's tool surface. They are checked
-            # after the mode commands but before ordinary chat, and they only
-            # ever run for the active owner. Known `!` commands never fall
-            # through to the language model when tools are unavailable.
-            admin_command = parse_admin_command(text)
+            # Remaining Admin commands are the owner's tool surface. They are
+            # checked after mode commands but before ordinary chat. Known admin
+            # commands never fall through to the language model.
             if admin_command is not None:
                 if owner and self._admin_mode and self._admin_inbox is not None:
                     return self._admin_inbox.submit(
