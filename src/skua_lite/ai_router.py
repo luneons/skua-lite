@@ -22,6 +22,7 @@ from .admin_commands import (
     AdminCommandHandler,
     AdminInbox,
     parse_admin_command,
+    split_chat_message,
 )
 
 
@@ -808,10 +809,11 @@ class AIChatRouter:
                 prompt = f"{prompt}\n\nLOADOUT PANDUAN:\n{guide_loadout}"
         # Remember this turn so follow-ups can reference it.
         self._remember(sender, sender_id, "user", text)
+        is_wiki = bool(wiki_context)
         thread = threading.Thread(
             target=self._generate_and_send,
             args=(prompt, sender, generation, owner, sender_id),
-            kwargs={"original_text": text},
+            kwargs={"original_text": text, "is_wiki": is_wiki},
             name="Mele-AI-Reply",
             daemon=True,
         )
@@ -827,6 +829,7 @@ class AIChatRouter:
         sender_id: int | None = None,
         original_text: str | None = None,
         research_done: bool = False,
+        is_wiki: bool = False,
     ) -> None:
         try:
             generated = self._generator(message)
@@ -878,36 +881,41 @@ class AIChatRouter:
                 sender_id,
                 original_text=original_text,
                 research_done=True,
+                is_wiki=is_wiki,
             )
         if intent:
             # Never surface the internal directive to the game chat.
             generated = "Datanya belum bisa diverifikasi sekarang."
         try:
-            generated = _safe_reply(generated, self._max_reply_chars)
+            cleaned_full = _safe_reply(generated, limit=2000)
             if message.startswith("Kirim sapaan singkat sekarang"):
-                reply = _addressed(generated, owner)
-            elif owner:
-                reply = generated
-            else:
-                # Never leak owner-only honorifics into another player's chat.
-                reply = _safe_non_owner_reply(generated, self._max_reply_chars)
-            reply = reply[:self._max_reply_chars].rstrip()
+                cleaned_full = _addressed(cleaned_full, owner)
+            elif not owner:
+                cleaned_full = _safe_non_owner_reply(cleaned_full, limit=2000)
+            cleaned_full = cleaned_full.strip()
         except Exception as exc:
             self._on_log(f"[AI] gagal membalas {sender}: {exc}")
             return
-        if not reply:
+        if not cleaned_full:
             return
         with self._lock:
             if not self._enabled or self._generation != generation:
                 return
         try:
-            self._send_chat(reply)
+            if is_wiki and len(cleaned_full) > self._max_reply_chars:
+                chunks = split_chat_message(cleaned_full, limit=self._max_reply_chars)
+                for i, part in enumerate(chunks):
+                    if i:
+                        time.sleep(1.5)
+                    self._send_chat(part)
+            else:
+                self._send_chat(cleaned_full[:self._max_reply_chars].rstrip())
         except Exception as exc:
             self._on_log(f"[AI] gagal mengirim balasan: {exc}")
             return
         # Record the assistant turn so the player's own question stays paired
         # with our honest answer in the conversation memory.
-        self._remember(sender, sender_id, "assistant", reply)
+        self._remember(sender, sender_id, "assistant", cleaned_full)
 
 
 def _research_allowed(

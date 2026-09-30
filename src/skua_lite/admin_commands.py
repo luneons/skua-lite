@@ -67,6 +67,35 @@ _COMMANDS = (
 PUBLIC_WIKI_COMMANDS = frozenset({"dapat", "item", "quest", "shop", "resep"})
 
 
+def split_chat_message(text: str, limit: int = 150) -> list[str]:
+    """Split text on word boundaries without dropping content."""
+    if limit < 1:
+        raise ValueError("limit harus positif")
+    words = " ".join((text or "").split()).split(" ")
+    parts: list[str] = []
+    current: list[str] = []
+    size = 0
+    for word in words:
+        if not word:
+            continue
+        while len(word) > limit:
+            if current:
+                parts.append(" ".join(current))
+                current, size = [], 0
+            parts.append(word[:limit])
+            word = word[limit:]
+        extra = len(word) + (1 if current else 0)
+        if size + extra > limit:
+            parts.append(" ".join(current))
+            current, size = [word], len(word)
+        else:
+            current.append(word)
+            size += extra
+    if current:
+        parts.append(" ".join(current))
+    return [part for part in parts if part]
+
+
 def parse_admin_command(message: str) -> tuple[str, str] | None:
     """Parse an admin command; return None when the message is not one."""
     match = _ADMIN_RE.match(message or "")
@@ -85,6 +114,7 @@ class AdminOutcome:
     consumed: bool
     reply: str = ""
     admin_off: bool = False
+    reply_multiline: bool = False
 
 
 @dataclass
@@ -122,9 +152,13 @@ class AdminCommandHandler:
         if verb == "cari":
             return AdminOutcome(True, self._blocking(self.tools.web_search, arg, arg))
         if verb in ("dapat", "item", "quest", "shop"):
-            return AdminOutcome(True, self._wiki_lookup(arg, kind=verb))
+            text = self._wiki_lookup(arg, kind=verb)
+            # If hit answer exceeds 150, send across paced parts instead of truncating.
+            multi = len(text) > 150 or "\n" in text
+            return AdminOutcome(True, text, reply_multiline=multi)
         if verb == "resep":
-            return AdminOutcome(True, self._wiki_recipe(arg))
+            text = self._wiki_recipe(arg)
+            return AdminOutcome(True, text, reply_multiline=True)
         if verb == "farm":
             return AdminOutcome(True, self._farm_suggestion(arg))
         if verb == "upgrade":
@@ -169,7 +203,7 @@ class AdminCommandHandler:
             return "Database wiki belum siap."
         if hit is None:
             return "Tidak ketemu di wiki lokal. Coba !cari <nama>."
-        return self._clamp(hit.short_answer(150))
+        return str(hit.answer).strip()
 
     def _wiki_recipe(self, query: str) -> str:
         """Resolve a multi-level material tree for a merge/craft item (<= 3 levels deep)."""
@@ -185,7 +219,7 @@ class AdminCommandHandler:
             return "Gagal membaca resep."
         if tree is None:
             return f"'{text}' tidak ditemukan atau bukan item merge/craft di wiki lokal."
-        return self._clamp(tree, limit=500)
+        return str(tree).strip()
 
     def _farm_suggestion(self, query: str) -> str:
         """Suggest only a wiki-proven map target; never invents monsters/maps."""
@@ -297,7 +331,10 @@ class AdminInbox:
             if not outcome.reply:
                 return
             try:
-                send_chat(outcome.reply)
+                if outcome.reply_multiline:
+                    self._send_multiline(send_chat, outcome.reply)
+                else:
+                    send_chat(outcome.reply)
             except Exception as exc:  # noqa: BLE001
                 self._handler.on_log(f"[ADMIN] gagal mengirim balasan: {exc}")
 
@@ -307,3 +344,24 @@ class AdminInbox:
             )
             thread.start()
         return True
+
+    def _send_multiline(self, send_chat, text: str, *, limit: int = 150, gap: float = 1.5) -> None:
+        """Send a long reply as several paced chat lines.
+
+        Newline structure is preserved first (recipe trees), then each line
+        is word-wrapped to `limit` chars.  A `gap` pause between sends keeps
+        AQW from treating the burst as spam.
+        """
+        import time
+
+        cleaned = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+        raw_lines = [ln.strip() for ln in cleaned.split("\n")]
+        chunks: list[str] = []
+        for ln in raw_lines:
+            if not ln:
+                continue
+            chunks.extend(split_chat_message(ln, limit))
+        for i, part in enumerate(chunks):
+            if i:
+                time.sleep(gap)
+            send_chat(part)
