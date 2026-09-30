@@ -146,45 +146,136 @@ def dispatch(bot: Any, action: str, arg: str) -> str | None:
     return None
 
 
+def _farm_scope(current_map: str) -> str:
+    """Room scope dari nama map penuh; hanya akhiran -100000 yang private."""
+    return "PRIVATE" if str(current_map or "").casefold().endswith("-100000") else "PUBLIC"
+
+
+def _farm_location(orch: Any) -> str:
+    bot = getattr(orch, "bot", None)
+    current = str(getattr(bot, "current_map", "") or "-")
+    base = current.split("-")[0] if "-" in current else current
+    cell = getattr(getattr(getattr(orch, "farming", None), "combat", None), "state", None)
+    cell_name = str(getattr(cell, "cell", "") or "-")
+    return f"{base} / {cell_name}"
+
+
+def _farm_character(orch: Any) -> str:
+    bot = getattr(orch, "bot", None)
+    level = getattr(bot, "level", "?")
+    state = getattr(getattr(getattr(orch, "farming", None), "combat", None), "state", None)
+    class_name = str(getattr(state, "class_name", "") or "-")
+    return f"Level {level} {class_name}".strip()
+
+
+def _farm_task(orch: Any) -> str:
+    runtime = getattr(orch, "farming", None)
+    planner = getattr(runtime, "auto_planner", None) if runtime is not None else None
+    goal = getattr(planner, "current_goal", None)
+    parts: list[str] = []
+    leveling_target = getattr(runtime, "_leveling_target", 0) or 0
+    if leveling_target:
+        try:
+            leveling_active = bool(runtime.is_leveling())
+        except Exception:
+            leveling_active = True
+        if leveling_active:
+            bot = getattr(orch, "bot", None)
+            current = getattr(bot, "level", "?")
+            parts.append(f"LEVELING {current} -> {leveling_target}")
+    if planner is not None and bool(getattr(planner, "active", False)) and goal is not None:
+        scope = "private" if bool(getattr(goal, "private", False)) else "public"
+        parts.append(f"AUTO {str(getattr(goal, 'kind', '')).upper()} {goal.target_name} ({scope})")
+    engine = getattr(runtime, "combat", None) if runtime is not None else None
+    combat_on = bool(getattr(engine, "running", False))
+    target = str(getattr(engine, "target_name", "") or "").strip()
+    if combat_on:
+        parts.append(f"COMBAT ON -> {target or 'semua di cell'}")
+    if not parts:
+        return "IDLE"
+    return " + ".join(parts)
+
+
+def _farm_state(orch: Any) -> str:
+    runtime = getattr(orch, "farming", None)
+    engine = getattr(runtime, "combat", None) if runtime is not None else None
+    if bool(getattr(engine, "running", False)):
+        return "COMBAT"
+    planner = getattr(runtime, "auto_planner", None) if runtime is not None else None
+    if planner is not None and bool(getattr(planner, "active", False)):
+        return "AUTO"
+    try:
+        leveling_active = bool(runtime.is_leveling())
+    except Exception:
+        leveling_active = False
+    if bool(getattr(runtime, "_leveling_target", 0)) and leveling_active:
+        return "LEVELING"
+    return "IDLE"
+
+
+def farm_dashboard_lines(orch: Any) -> list[str]:
+    """Satu layar status farming: lokasi, karakter, dan tugas aktif."""
+    bot = getattr(orch, "bot", None)
+    current = str(getattr(bot, "current_map", "") or "-")
+    server = getattr(bot, "server", None)
+    server_name = str(getattr(server, "name", "") or "-")
+    return [
+        "FARMING DASHBOARD",
+        f"[{_farm_scope(current)}] {server_name} | {current}",
+        f"Lokasi: {_farm_location(orch)}",
+        f"Karakter: {_farm_character(orch)}",
+        f"Tugas: {_farm_task(orch)}",
+    ]
+
+
+def farm_prompt(orch: Any) -> str:
+    """Prompt pendek kontekstual: scope, lokasi, dan status tugas."""
+    bot = getattr(orch, "bot", None)
+    current = str(getattr(bot, "current_map", "") or "-")
+    base = current.split("-")[0] if "-" in current else current
+    state = getattr(
+        getattr(getattr(getattr(orch, "farming", None), "combat", None), "state", None),
+        "cell",
+        "",
+    )
+    cell = str(state or "-")
+    return f"[{_farm_scope(current)} | {base}/{cell} | {_farm_state(orch)}] > "
+
+
+def print_farm_help() -> None:
+    """Bantuan farming yang dikelompokkan; tanpa mengubah parser lama."""
+    print("MULAI CEPAT")
+    print("  .dashboard / .ui            -> status farming + tugas aktif")
+    print("  .leveling [level] [-private] -> leveling otomatis")
+    print("  .attack <nama> / auto / off -> mulai atau hentikan serangan")
+    print("NAVIGASI")
+    print("  .join <map> [-private]      -> pindah map")
+    print("  .cell <nama> [pad]          -> pindah cell")
+    print("  .cells                      -> daftar cell hasil scan")
+    print("  .move <x> <y>               -> gerak ke koordinat")
+    print("PERTARUNGAN")
+    print("  .goal map / stop            -> lawan semua musuh / berhenti")
+    print("  .combat                     -> status combat + monster")
+    print("  .capture on|off             -> rekam paket combat")
+    print("PERLENGKAPAN")
+    print("  .class / .weapon / .armor / .helm / .cape")
+    print("  .item scan|list|type <tipe> -> daftar item")
+    print("  .equip <nomor|nama>         -> pakai item")
+    print("  .drop / .rest / .booster / .aggro / .quest / .sell / .bank")
+    print("INFO")
+    print("  .status / .area / .dapat <item> / .chat <pesan|/command>")
+    print("Tanpa -private = room publik; -private = room 100000.")
+
+
 def print_farm_banner(orch: Any) -> None:
     bot = orch.bot
-    print("\n" + "=" * 56)
-    print("        SKUA-LITE  ** MODE FARMING **        ")
-    print("=" * 56)
+    for line in farm_dashboard_lines(orch):
+        print(line)
     print(f" User   : {bot.username}")
-    print(f" Server : {bot.server.name} ({bot.server.ip}:{bot.server.port})")
-    print(f" Map    : {bot.current_map} (room #{bot.room_id})")
     print(f" Status : {bot.state.value} | AFK: {bot.is_afk}")
     print(f" AI     : OFF (mode farming tidak memuat AI/Admin)")
     print("-" * 56)
-    print(" PERINTAH FARMING (awali dengan titik):")
-    print("   .status                   -> ringkasan runtime")
-    print("   .join <map> [-private]    -> publik default; -private = room 100000")
-    print("   .leveling [level] [-private] -> leveling publik/private")
-    print("   .move <x> <y>             -> gerak ke koordinat")
-    print("   .drop <drop_id>           -> ambil drop")
-    print("   .rest                     -> minta rest")
-    print("   .booster <item_id>        -> pakai consumable")
-    print("   .aggro <id> [id2 ...]     -> tarik monster by MonMapID")
-    print("   .quest <id> [reward] [turnins]")
-    print("   .sell <item_id> <qty> <char_item_id>")
-    print("   .bank load|in|out ...     -> operasi bank")
-    print("   .attack <nama>            -> auto-attack monster nama itu")
-    print("   .attack auto              -> serang SEMUA monster hidup di cell")
-    print("   .attack off               -> hentikan auto-attack")
-    print("   .cell <nama> [pad]        -> pindah cell via moveToCell")
-    print("   .cells                    -> daftar semua cell hasil scan map")
-    print("   .combat                   -> status combat + daftar monster di-scan")
-    print("   .area [json]              -> snapshot area dinamis + provenance")
-    print("   .goal map                 -> lawan SEMUA musuh di map ini")
-    print("   .goal stop                -> hentikan tujuan map")
-    print("   (tanpa titik juga bisa: 'lawan semua musuh di map ini')")
-    print("   .capture on|off           -> rekam paket combat ke combat_capture.log")
-    print("   .dapat <item>             -> sumber item dari wiki lokal (offline)")
-    print("   .wiki <item>              -> sama seperti .dapat")
-    print("   .chat <pesan|/command>    -> chat biasa atau cmd game (/join, /goto)")
-    print("-" * 56)
-    print(" Umum: chat <pesan> | status | quit")
+    print(" Ketik .dashboard untuk status, .help untuk semua perintah.")
     print("=" * 56 + "\n")
 
 
@@ -262,11 +353,14 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
         "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
         "weapon", "armor", "helm", "cape", "level", "leveling", "dapat", "wiki",
+        "help", "dashboard", "ui",
     }
     if action not in known:
         return "", ""
     if action == "leveling":
         action = "level"
+    if action == "ui":
+        action = "dashboard"
     return action, (parts[1].strip() if len(parts) > 1 else "")
 
 
@@ -310,7 +404,14 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
         print("[WARN] runtime farming tidak tersedia.")
         return None
     try:
-        if action in ("status", "st"):
+        if action == "dashboard":
+            print("\n" + "=" * 56)
+            for line in farm_dashboard_lines(orch):
+                print(line)
+            print("=" * 56)
+        elif action == "help":
+            print_farm_help()
+        elif action in ("status", "st"):
             print(f"[FARM] {runtime.status()}")
         elif action == "join":
             target, private = _private_requested(arg)
@@ -506,7 +607,7 @@ def farm_menu_loop(orch: Any) -> None:
     print_farm_banner(orch)
     while True:
         try:
-            line = input("skua-farm> ").strip()
+            line = input(farm_prompt(orch)).strip()
         except (EOFError, KeyboardInterrupt):
             print("\n[EXIT] Menghentikan bot...")
             bot.stop()
