@@ -260,6 +260,7 @@ _ALIASES = {
     "saranfarm": "saranfarm",
     "ss": "__screenshot__",
     "resep": "resep",
+    "kenapa": "kenapa",
     "pengaturan": "__settings__",
     "setting": "__settings__",
     "config": "__settings__",
@@ -333,6 +334,7 @@ def help_text() -> str:
         "/saranfarm <monster>\n"
         "/ss - screenshot kondisi akun (karakter, map, kelas)\n"
         "/resep <item> - pohon bahan merge dari wiki lokal\n"
+        "/kenapa - diagnosa kegagalan terakhir + syarat sebelumnya yang dikerjakan\n"
         "/pengaturan - info akun, server, Telegram owner\n"
         "/gantiserver [nama_server] - ganti server (tanpa arg: daftar server)\n"
         "/gantiakun - petunjuk ganti akun (Hint: simpan dulu lewat terminal)\n"

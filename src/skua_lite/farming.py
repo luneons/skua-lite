@@ -16,6 +16,11 @@ from typing import Any, Callable
 
 from .admin_commands import resolve_room_target
 from .auto_planner import AutoDecision, AutoGoal, AutoObservation, AutoPlanner
+from .reasoning_engine import (
+    FailureKind,
+    diagnose_failure,
+    format_diagnosis_log,
+)
 from . import combat, sfs
 from .area_state import AreaStateStore
 from .bot import BotError
@@ -90,6 +95,8 @@ class FarmingRuntime:
         # class-only view combat keeps for its profile.
         self.item_catalog = ItemCatalog()
         self.quest_state = QuestState()
+        from .reasoning_engine import ReasoningEngine
+        self.reasoning = ReasoningEngine(self.quest_state)
         from .scw import SCWStoryExecutor
         self.scw_story = SCWStoryExecutor(self)
         self.area_state = AreaStateStore(
@@ -168,6 +175,24 @@ class FarmingRuntime:
                     if success and quest_id > 0:
                         self._send(sfs.get_quests_packet(self.bot.room_id, quest_id),
                                    f"muat quest {quest_id}")
+                    elif not success and quest_id > 0:
+                        # --- reasoning: diagnosa penolakan dan cari syarat sebelumnya ---
+                        reason = diagnose_failure("acceptQuest", message, quest_id=quest_id)
+                        self.last_reason = reason
+                        steps = self.reasoning.plan_recovery(reason)
+                        self.last_recovery = list(steps)
+                        self._on_log(format_diagnosis_log(reason, steps))
+                        # Kalau ada prerequisite quest yang harus dikerjakan dulu,
+                        # arahkan dependency leveling ke sana agar loop otomatis beralih.
+                        if reason.kind == FailureKind.PREREQUISITE_QUEST and steps:
+                            from .scw import QuestStep
+                            s = steps[0]
+                            dep = QuestStep(
+                                quest_id=s.quest_id,
+                                map_name=s.map_name,
+                                target=s.target or "*",
+                            )
+                            self.leveling_dependency = dep
                 elif cmd == "ccqr":
                     quest_id = int(obj.get("QuestID", 0) or 0)
                     success = int(obj.get("bSuccess", 0) or 0) == 1
@@ -176,6 +201,13 @@ class FarmingRuntime:
                         f"[QUEST] turn-in {quest_id} {'BERHASIL' if success else 'GAGAL'}"
                         + (f": {message}" if message else " (server menolak/tidak memenuhi syarat)")
                     )
+                    if not success and quest_id > 0:
+                        # --- reasoning: diagnosa penolakan turn-in ---
+                        reason = diagnose_failure("ccqr", message, quest_id=quest_id)
+                        self.last_reason = reason
+                        steps = self.reasoning.plan_recovery(reason)
+                        self.last_recovery = list(steps)
+                        self._on_log(format_diagnosis_log(reason, steps))
             self._scan_map_cells_if_changed()
 
     def _sync_class_profile(self) -> None:
@@ -795,7 +827,11 @@ class FarmingRuntime:
                 try:
                     # Public by default; `-private` is an explicit CLI choice.
                     self.join(target_map, private=self._leveling_private)
-                except (FarmingUnsupported, BotError):
+                except (FarmingUnsupported, BotError) as exc:
+                    # --- reasoning: diagnosa kegagalan join + syarat sebelumnya ---
+                    reason = diagnose_failure("join", str(exc), quest_id=None)
+                    self.last_reason = reason
+                    self._on_log(format_diagnosis_log(reason, self.reasoning.plan_recovery(reason)))
                     time.sleep(2.0)
                     continue
                 # wait map load

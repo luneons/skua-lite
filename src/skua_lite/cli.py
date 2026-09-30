@@ -355,7 +355,7 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
         "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
         "weapon", "armor", "helm", "cape", "level", "leveling", "dapat", "wiki", "resep",
-        "saranfarm", "tambahakun", "help", "dashboard", "ui",
+        "saranfarm", "tambahakun", "kenapa", "help", "dashboard", "ui",
     }
     if action not in known:
         return "", ""
@@ -598,6 +598,14 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
                 return None
             accounts.add_account(username, password)
             print(f"[AKUN] '{username}' tersimpan terenkripsi. /gantiakun di Telegram siap.")
+        elif action == "kenapa":
+            reason = getattr(runtime, "last_reason", None)
+            recovery = getattr(runtime, "last_recovery", None) or []
+            if reason is None:
+                print("[REASON] belum ada kegagalan tercatat; bot berjalan normal.")
+            else:
+                from .reasoning_engine import format_diagnosis_log
+                print(format_diagnosis_log(reason, recovery))
         elif action == "item":
             parts = arg.split(maxsplit=1)
             sub = parts[0].lower() if parts else "scan"
