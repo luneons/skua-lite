@@ -24,6 +24,7 @@ class AutoGoal:
     drop_name: str = ""
     quantity: int = 1
     map_name: str = ""
+    private: bool = False
     started_at: float = 0.0
 
 
@@ -56,12 +57,27 @@ class AutoGoalParser:
             return None
         if not raw:
             return None
+        from .admin_commands import split_private_flag
+
+        body, private = split_private_flag(raw)
+        if private:
+            # Rebuild the canonical sentence without the scope flag so the
+            # closed-shape parsers below see exactly the form they accept.
+            clean = " ".join(body.split()).casefold()
+            raw = body
+            if not raw:
+                return None
 
         if "quest" in clean:
-            return cls._quest(raw)
-        if clean.startswith(("cari ", "farming ", "farm ", "lawan ")):
-            return cls._hunt(raw)
-        return None
+            goal = cls._quest(raw)
+        elif clean.startswith(("cari ", "farming ", "farm ", "lawan ")):
+            goal = cls._hunt(raw)
+        else:
+            return None
+        if goal is None:
+            return None
+        goal.private = private
+        return goal
 
     @classmethod
     def _quest(cls, raw: str) -> AutoGoal | None:
@@ -278,4 +294,5 @@ class AutoPlanner:
                 )
             if goal.kind == "quest":
                 return f"Menyelesaikan quest {goal.target_name}"
-            return f"Tujuan {goal.kind}: {goal.target_name}"
+            scope = "private" if goal.private else "public"
+            return f"Tujuan {goal.kind}: {goal.target_name} ({scope})"

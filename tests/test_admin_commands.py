@@ -12,6 +12,8 @@ from skua_lite.admin_commands import (
     AdminInbox,
     AdminOutcome,
     parse_admin_command,
+    resolve_room_target,
+    split_private_flag,
 )
 from skua_lite.agent_tools import AgentTools, ToolResult
 
@@ -28,6 +30,35 @@ def test_parse_recognises_known_admin_commands():
     assert parse_admin_command("!cari harga emas") == ("cari", "harga emas")
     assert parse_admin_command("  !STATUS ") == ("status", "")
     assert parse_admin_command("!join yulgar-14045") == ("join", "yulgar-14045")
+
+
+def test_private_flag_is_only_a_separated_trailing_marker():
+    assert split_private_flag("yulgar") == ("yulgar", False)
+    assert split_private_flag("yulgar-14045") == ("yulgar-14045", False)
+    assert split_private_flag("yulgar -private") == ("yulgar", True)
+    assert split_private_flag("sevencircleswar PRIVATE") == ("sevencircleswar", True)
+    assert split_private_flag("-private") == ("", True)
+
+
+def test_private_room_resolution_preserves_explicit_numeric_rooms():
+    assert resolve_room_target("yulgar", private=False) == "yulgar"
+    assert resolve_room_target("yulgar", private=True) == "yulgar-100000"
+    assert resolve_room_target("yulgar-14045", private=True) == "yulgar-14045"
+
+
+def test_admin_join_uses_public_by_default_and_private_only_on_request(tmp_path):
+    joined: list[str] = []
+    actions = AdminActions(join_map=lambda target: joined.append(target) or True)
+    handler = _handler(tmp_path, actions=actions)
+
+    outcome = handler.handle("MELE", "!join yulgar")
+    assert outcome.consumed is True
+    assert joined == ["yulgar"]
+
+    outcome = handler.handle("MELE", "!join yulgar -private")
+    assert outcome.consumed is True
+    assert joined[-1] == "yulgar-100000"
+    assert "private" in outcome.reply.lower()
 
 
 def test_parse_ignores_plain_chat_and_unknown_bang_words():

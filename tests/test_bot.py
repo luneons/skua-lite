@@ -518,6 +518,19 @@ def test_chat_slash_join_triggers_join_map(mock_yorumi):
     b.stop()
 
 
+def test_chat_slash_join_private_suffix_targets_room_100000():
+    b = Mock()
+    b.state = bot.BotState.IN_MAP
+    b.join_map = Mock()
+
+    bot.AQWBot.chat(b, "/join sevencircleswar")
+    b.join_map.assert_called_once_with("sevencircleswar")
+
+    b.join_map.reset_mock()
+    bot.AQWBot.chat(b, "/join sevencircleswar -private")
+    b.join_map.assert_called_once_with("sevencircleswar-100000")
+
+
 def test_chat_slash_join_without_arg_raises(mock_yorumi):
     """Pakai /join tanpa argumen -> error, bukan crash."""
     mock_yorumi.scripted.extend([

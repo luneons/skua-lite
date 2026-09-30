@@ -465,6 +465,38 @@ def test_farming_runtime_wires_auto_planner_actions_to_verified_packets():
     assert calls == []
 
 
+def test_auto_farm_goal_joins_private_room_only_when_flagged():
+    bot = Mock()
+    bot.state.value = "IN_MAP"
+    bot.current_map = "battleon"
+    bot.move_on_join = None
+    bot.room_id = 273
+    runtime = farming.FarmingRuntime(bot=bot)
+    joined: list[tuple[str, bool]] = []
+    runtime.join = lambda name, private=False: joined.append((name, private))
+
+    runtime.set_auto_goal(
+        AutoGoal(kind="farm", target_name="Skeleton", map_name="oaklore")
+    )
+    runtime.auto_tick()
+    assert joined == [("oaklore", False)]
+
+    joined.clear()
+    runtime.set_auto_goal(AutoGoal(
+        kind="farm", target_name="Skeleton", map_name="oaklore", private=True,
+    ))
+    runtime.auto_tick()
+    assert joined == [("oaklore", True)]
+
+    joined.clear()
+    bot.current_map = "oaklore"
+    runtime.set_auto_goal(AutoGoal(
+        kind="farm", target_name="Skeleton", map_name="oaklore", private=True,
+    ))
+    runtime.auto_tick()
+    assert joined == [("oaklore", True)]
+
+
 def test_farming_runtime_refuses_drop_goal_until_item_tracking_exists():
     bot = Mock()
     bot.move_on_join = None
@@ -965,7 +997,7 @@ def test_farm_cli_parses_combat_capture_and_dispatches_commands():
             calls.append(("status", None))
             return "ok"
 
-        def join(self, target):
+        def join(self, target, private=False):
             calls.append(("join", target))
 
         def complete_quest(self, quest_id, reward_id=-1, turn_ins=""):

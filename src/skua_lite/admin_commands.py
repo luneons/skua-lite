@@ -29,6 +29,36 @@ from .wiki_knowledge import WikiKnowledge
 
 # `!cari info dragon fable` -> ("cari", "info dragon fable")
 _ADMIN_RE = re.compile(r"^\s*!\s*([A-Za-z]+)\s*(.*)$")
+_PRIVATE_TAIL_RE = re.compile(r"(?i)\s+(?:-+|\s*)private\s*$")
+
+
+def split_private_flag(text: str) -> tuple[str, bool]:
+    """Return ``(cleaned, private)`` for a trailing room-scope flag.
+
+    Only an explicit trailing marker counts: ``yulgar`` and ``yulgar-14045``
+    stay public, while ``yulgar -private`` selects the private ``-100000``
+    room. The helper never treats an embedded room number as private, because
+    plain ``<map>-<room>`` joins are valid public joins in AQW.
+    """
+    cleaned = " ".join(str(text or "").split())
+    lowered = cleaned.casefold()
+    if lowered in {"-private", "--private", "private"}:
+        return "", True
+    match = _PRIVATE_TAIL_RE.search(cleaned)
+    if match is None:
+        return cleaned, False
+    return cleaned[: match.start()].strip(), True
+
+
+def resolve_room_target(map_name: str, *, private: bool) -> str:
+    """Resolve an explicit private request to AQW's standard room 100000."""
+    target = str(map_name or "").strip()
+    if not target or not private:
+        return target
+    if re.fullmatch(r".+-\d{1,6}", target):
+        return target
+    return f"{target}-100000"
+
 
 _COMMANDS = (
     "cari", "dapat", "item", "quest", "shop", "upgrade", "exec", "run",
@@ -164,15 +194,17 @@ class AdminCommandHandler:
 
     # -- game movement ------------------------------------------------------
     def _game_join(self, target: str) -> str:
-        name = (target or "").strip()
+        name, private = split_private_flag(target)
         if not name:
-            return "Format: !join <map>, misal !join yulgar-14045"
+            return "Format: !join <map> [-private], misal !join yulgar-14045"
+        resolved = resolve_room_target(name, private=private)
         try:
-            moved = self.actions.join_map(name)
+            moved = self.actions.join_map(resolved)
         except Exception as exc:  # noqa: BLE001
             self.on_log(f"[ADMIN] join gagal: {exc}")
-            return f"Gagal join {name}."
-        return f"Join ke {name}." if moved else f"Gagal join {name}."
+            return f"Gagal join {resolved}."
+        scope = " (room private)" if private else ""
+        return f"Join ke {resolved}{scope}." if moved else f"Gagal join {resolved}."
 
     def _game_move(self, arg: str) -> str:
         parts = (arg or "").split()

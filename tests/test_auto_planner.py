@@ -49,6 +49,15 @@ def test_auto_goal_parser_reads_generic_farm():
     assert goal is not None
     assert goal.kind == "farm"
     assert "Water Draconian" in goal.target_name
+    assert goal.private is False
+
+
+def test_auto_goal_parser_marks_private_only_with_trailing_flag():
+    goal = AutoGoalParser.parse("auto farming Water Draconian -private")
+    assert goal is not None
+    assert goal.kind == "farm"
+    assert goal.target_name == "Water Draconian"
+    assert goal.private is True
 
 
 def test_auto_goal_parser_returns_none_for_garbage():

@@ -18,6 +18,7 @@ from typing import Callable
 
 from . import client, config, sfs
 from .ai_router import is_owner_account, is_owner_id
+from .admin_commands import resolve_room_target, split_private_flag
 from .follow import OwnerFollower, parse_follow_command
 from .servers import Server
 
@@ -767,9 +768,12 @@ class AQWBot:
             command = parts[0].lower()
             argument = " ".join(parts[1:]).strip()
             if command == "join":
-                if not argument:
-                    raise BotError("pemakaian: /join <map>, contoh: /join yulgar-14045")
-                self.join_map(argument)
+                target, private = split_private_flag(argument)
+                if not target:
+                    raise BotError(
+                        "pemakaian: /join <map> [-private], contoh: /join yulgar"
+                    )
+                self.join_map(resolve_room_target(target, private=private))
                 return
             if command == "goto":
                 if not argument:

@@ -14,6 +14,7 @@ import threading
 import time
 from typing import Any, Callable
 
+from .admin_commands import resolve_room_target
 from .auto_planner import AutoDecision, AutoGoal, AutoObservation, AutoPlanner
 from . import combat, sfs
 from .area_state import AreaStateStore
@@ -83,6 +84,8 @@ class FarmingRuntime:
         self._leveling_spot: tuple[str, str] | None = None
         self.leveling_dependency = None
         self._leveling_probe_done = False
+        self._leveling_private = False
+        self._auto_private = False
         # Full item picture (inventory + bank, every type), separate from the
         # class-only view combat keeps for its profile.
         self.item_catalog = ItemCatalog()
@@ -274,6 +277,16 @@ class FarmingRuntime:
                 "tujuan quest belum bisa: bot belum melacak progres quest. "
                 "Pakai '.auto farming <monster>'."
             )
+        # Room scope rides on the goal itself, so reconnect/resume keeps the
+        # public default unless the owner asked for private explicitly.
+        self._auto_private = bool(getattr(goal, "private", False))
+        target_map = str(getattr(goal, "map_name", "") or "").strip()
+        if target_map and not self._room_matches(
+            str(getattr(self.bot, "current_map", "") or ""),
+            target_map,
+            private=self._auto_private,
+        ):
+            self.join(target_map, private=self._auto_private)
         return self.auto_planner.set_goal(goal)
 
     def _observe_auto(self) -> AutoObservation:
@@ -343,10 +356,33 @@ class FarmingRuntime:
         self.bot._send_raw(packet)
         self._on_log(f"[FARM] {label}")
 
-    def join(self, map_name: str) -> None:
-        target = map_name.strip()
+    @staticmethod
+    def _room_target(map_name: str, *, private: bool) -> str:
+        """Attach a room only when explicitly requested.
+
+        AQW `/join` semantics: a bare `map` joins the current/public instance,
+        while `<map>-100000` routes to a private instance. The caller's intent
+        decides — never infer privacy from a missing `-<room>` suffix because
+        plain map names are valid public joins.
+        """
+        target = str(map_name or "").strip()
         if not target:
             raise ValueError("nama map tidak boleh kosong")
+        return resolve_room_target(target, private=private)
+
+    @staticmethod
+    def _room_matches(current_map: str, target_map: str, *, private: bool) -> bool:
+        """True when the current instance already satisfies the requested scope."""
+        current = str(current_map or "").strip()
+        wanted = str(target_map or "").strip()
+        if not current or not wanted:
+            return False
+        base = current.split("-")[0]
+        current_private = current.casefold().endswith("-100000")
+        return base.casefold() == wanted.casefold() and current_private == bool(private)
+
+    def join(self, map_name: str, *, private: bool = False) -> None:
+        target = self._room_target(map_name, private=private)
         self.bot.join_map(target)
         self.profile.map_name = target
 
@@ -684,23 +720,30 @@ class FarmingRuntime:
             f"probe quest gate {SCW_GATE_QUEST}",
         )
 
-    def start_leveling(self, target: int = 100) -> str:
-        """Begin a background auto-level loop toward the target level."""
+    def start_leveling(self, target: int = 100, *, private: bool = False) -> str:
+        """Begin a background auto-level loop toward the target level.
+
+        Room scope is explicit: default is the public instance, `-private`
+        selects `<map>-100000`. The running loop reads `_leveling_private`,
+        so a restart while leveling keeps the chosen scope.
+        """
         current = int(getattr(self.bot, "level", 1) or 1)
         goal = max(1, min(100, int(target or 100)))
+        scope = "private" if private else "public"
         if current >= goal:
             return f"sudah level {current}; target {goal} tercapai"
         spot = self._level_bracket(current)
         if spot is None:
             return f"sudah level {current}; target {goal} tercapai"
         self._leveling_target = goal
+        self._leveling_private = bool(private)
         self._leveling_stop.clear()
         thread = threading.Thread(
             target=self._leveling_loop, name="auto-level", daemon=True
         )
         self._leveling_thread = thread
         thread.start()
-        return f"auto leveling level {current} → {goal}"
+        return f"auto leveling level {current} → {goal} ({scope})"
 
     def stop_leveling(self) -> str:
         """Stop the auto-level loop without touching combat/follow state."""
@@ -733,9 +776,8 @@ class FarmingRuntime:
             target_map = spot.map_name.lower()
             if raw_map != target_map:
                 try:
-                    # Skua private instance usually ends in -100000,
-                    # but we use 100000 for standard private routing
-                    self.join(f"{target_map}-100000")
+                    # Public by default; `-private` is an explicit CLI choice.
+                    self.join(target_map, private=self._leveling_private)
                 except (FarmingUnsupported, BotError):
                     time.sleep(2.0)
                     continue

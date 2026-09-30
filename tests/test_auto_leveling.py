@@ -112,7 +112,7 @@ def test_auto_level_command_wires_to_farming_runtime(capsys):
     result = cli.dispatch_farm(orch, "level", "auto")
 
     assert result == "farm"
-    runtime.start_leveling.assert_called_once_with(100)
+    runtime.start_leveling.assert_called_once_with(100, private=False)
     assert "level 65" in capsys.readouterr().out
 
 
@@ -171,18 +171,80 @@ def test_orchestrator_connect_propagates_login_level_to_bot(monkeypatch, tmp_pat
     assert (spot.map_name, spot.cell) == ("battlegrounde", "r2")
 
 
+def test_parse_leveling_alias_and_private_suffix():
+    assert cli.parse_farm_command(".leveling") == ("level", "")
+    assert cli.parse_farm_command(".leveling -private") == ("level", "-private")
+    assert cli.parse_farm_command(".leveling 80 -private") == (
+        "level", "80 -private"
+    )
+
+
+def test_level_private_suffix_is_opt_in(capsys):
+    runtime = Mock()
+    runtime.start_leveling.return_value = "ok"
+    orch = SimpleNamespace(farming=runtime, bot=Mock(level=35))
+
+    assert cli.dispatch_farm(orch, "level", "") == "farm"
+    runtime.start_leveling.assert_called_once_with(100, private=False)
+
+    runtime.reset_mock()
+    assert cli.dispatch_farm(orch, "level", "-private") == "farm"
+    runtime.start_leveling.assert_called_once_with(100, private=True)
+
+    runtime.reset_mock()
+    assert cli.dispatch_farm(orch, "level", "80 -private") == "farm"
+    runtime.start_leveling.assert_called_once_with(80, private=True)
+
+
+def test_join_private_suffix_is_opt_in():
+    runtime = Mock()
+    orch = SimpleNamespace(farming=runtime, bot=Mock())
+
+    assert cli.dispatch_farm(orch, "join", "sevencircleswar") == "farm"
+    runtime.join.assert_called_once_with("sevencircleswar", private=False)
+
+    runtime.reset_mock()
+    assert cli.dispatch_farm(orch, "join", "sevencircleswar -private") == "farm"
+    runtime.join.assert_called_once_with("sevencircleswar", private=True)
+
+
+def test_runtime_room_target_appends_private_id_without_breaking_hyphenated_maps():
+    assert FarmingRuntime._room_target("sevencircleswar", private=False) == "sevencircleswar"
+    assert FarmingRuntime._room_target("sevencircleswar", private=True) == "sevencircleswar-100000"
+    assert FarmingRuntime._room_target("map-with-hyphen", private=True) == "map-with-hyphen-100000"
+    assert FarmingRuntime._room_target("yulgar-14045", private=True) == "yulgar-14045"
+
+
+def test_runtime_room_match_requires_requested_public_or_private_scope():
+    assert FarmingRuntime._room_matches("oaklore", "oaklore", private=False)
+    assert not FarmingRuntime._room_matches("oaklore-100000", "oaklore", private=False)
+    assert FarmingRuntime._room_matches("oaklore-100000", "oaklore", private=True)
+    assert not FarmingRuntime._room_matches("oaklore", "oaklore", private=True)
+
+
+def test_runtime_join_sends_selected_public_or_private_room():
+    bot = Mock()
+    runtime = FarmingRuntime(bot=bot)
+
+    runtime.join("sevencircleswar")
+    bot.join_map.assert_called_with("sevencircleswar")
+
+    runtime.join("sevencircleswar", private=True)
+    bot.join_map.assert_called_with("sevencircleswar-100000")
+
+
 def test_level_command_defaults_to_auto_and_accepts_target(capsys):
     runtime = Mock()
     runtime.start_leveling.return_value = "auto leveling level 35 → 100"
     orch = SimpleNamespace(farming=runtime, bot=Mock(level=35))
 
     assert cli.dispatch_farm(orch, "level", "") == "farm"
-    runtime.start_leveling.assert_called_once_with(100)
+    runtime.start_leveling.assert_called_once_with(100, private=False)
 
     runtime.reset_mock()
     runtime.start_leveling.return_value = "auto leveling level 35 → 80"
     assert cli.dispatch_farm(orch, "level", "80") == "farm"
-    runtime.start_leveling.assert_called_once_with(80)
+    runtime.start_leveling.assert_called_once_with(80, private=False)
 
 
 def test_level_stop_stops_leveling_only(capsys):
@@ -311,7 +373,7 @@ def test_start_leveling_does_not_join_before_background_loop():
 
     message = runtime.start_leveling(100)
 
-    assert message == "auto leveling level 22 → 100"
+    assert message == "auto leveling level 22 → 100 (public)"
     runtime.join.assert_not_called()
 
 
@@ -326,7 +388,7 @@ def test_leveling_loop_survives_join_bot_error(monkeypatch):
     
     # Track calls and force exception on first join
     joins = []
-    def fake_join(target):
+    def fake_join(target, private=False):
         joins.append(target)
         if len(joins) == 1:
             raise BotError("cannot join map right now")
@@ -351,7 +413,7 @@ def test_leveling_loop_survives_join_bot_error(monkeypatch):
     t.join(timeout=1.0)
     
     assert len(joins) >= 2
-    assert joins[0] == "icestormarena-100000"
+    assert joins[0] == "icestormarena"
 
 
 def test_leveling_loop_rate_limits_quest_accepts(monkeypatch):

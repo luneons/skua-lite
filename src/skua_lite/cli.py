@@ -19,6 +19,7 @@ import time
 from typing import Any
 
 from .auto_planner import AutoGoalParser
+from .admin_commands import split_private_flag
 
 
 SW_HIDE = 0
@@ -158,7 +159,8 @@ def print_farm_banner(orch: Any) -> None:
     print("-" * 56)
     print(" PERINTAH FARMING (awali dengan titik):")
     print("   .status                   -> ringkasan runtime")
-    print("   .join <map>               -> pindah map farm")
+    print("   .join <map> [-private]    -> publik default; -private = room 100000")
+    print("   .leveling [level] [-private] -> leveling publik/private")
     print("   .move <x> <y>             -> gerak ke koordinat")
     print("   .drop <drop_id>           -> ambil drop")
     print("   .rest                     -> minta rest")
@@ -192,6 +194,15 @@ def _goal_noun(text: str) -> bool:
 
 
 _GOAL_VERBS = {"lawan", "serang", "habisi", "basmi", "bunuh", "clear"}
+
+
+def _private_requested(text: str) -> tuple[str, bool]:
+    """Strip a trailing `-private` flag; public is the default.
+
+    This is a thin CLI alias over the shared admin helper so chat (`!join`)
+    and terminal (`.join`/`.leveling`) accept exactly the same room scope.
+    """
+    return split_private_flag(text)
 
 
 def _parse_goal_sentence(raw: str) -> tuple[str, str] | None:
@@ -250,10 +261,12 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         "status", "st", "join", "move", "drop", "rest", "booster", "aggro",
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
         "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
-        "weapon", "armor", "helm", "cape", "level", "dapat", "wiki",
+        "weapon", "armor", "helm", "cape", "level", "leveling", "dapat", "wiki",
     }
     if action not in known:
         return "", ""
+    if action == "leveling":
+        action = "level"
     return action, (parts[1].strip() if len(parts) > 1 else "")
 
 
@@ -300,7 +313,8 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
         if action in ("status", "st"):
             print(f"[FARM] {runtime.status()}")
         elif action == "join":
-            runtime.join(arg)
+            target, private = _private_requested(arg)
+            runtime.join(target, private=private)
         elif action == "move":
             x, y = (int(v) for v in arg.replace(",", " ").split()[:2])
             runtime.move(x, y)
@@ -463,15 +477,15 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
                 _print_menu("Item", rows, ".equip <nomor> atau .equip <nama item>")
             else:
                 raise ValueError("format: .item scan | list | type <tipe>")
-        elif action == "level":
-            target = arg.strip()
+        elif action in ("level", "leveling"):
+            target, private = _private_requested(arg)
             if target in ("stop", "off", "berhenti"):
                 print(f"[LEVEL] {runtime.stop_leveling()}")
             else:
                 goal = 100
                 if target and target.isdigit():
                     goal = int(target)
-                print(f"[LEVEL] {runtime.start_leveling(goal)}")
+                print(f"[LEVEL] {runtime.start_leveling(goal, private=private)}")
         elif action == "equip":
             if not arg.strip():
                 raise ValueError("format: .equip <nomor|nama item>")
