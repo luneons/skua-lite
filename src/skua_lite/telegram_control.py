@@ -138,6 +138,62 @@ class TelegramTransport:
         result = self._call("getUpdates", payload)
         return list(result or [])
 
+    def send_photo(
+        self,
+        chat_id: int,
+        image_bytes: bytes,
+        *,
+        caption: str = "",
+        buttons: list[list[dict[str, str]]] | None = None,
+    ) -> Any:
+        """Send a photo via multipart/form-data."""
+        import io, email.generator, random, string
+        boundary = "".join(random.choices(string.ascii_lowercase, k=16))
+        body = io.BytesIO()
+        # chat_id field
+        field = f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n"
+        body.write(field.encode("utf-8"))
+        # caption field
+        if caption:
+            cap_field = f"--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n{caption[:1024]}\r\n"
+            body.write(cap_field.encode("utf-8"))
+        # photo field
+        body.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"ss.png\"\r\nContent-Type: image/png\r\n\r\n".encode("utf-8"))
+        body.write(image_bytes)
+        if buttons:
+            import json as _json
+            kb_field = f"--{boundary}\r\nContent-Disposition: form-data; name=\"reply_markup\"\r\n\r\n{_json.dumps({'inline_keyboard': buttons})}\r\n"
+            body.write(kb_field.encode("utf-8"))
+        body.write(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+        data = body.getvalue()
+        request = urllib.request.Request(
+            f"{self.base_url}/sendPhoto",
+            data=data,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", "replace")
+            except Exception:
+                pass
+            raise TelegramNetworkError(f"sendPhoto HTTP {exc.code}: {detail[:300]}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise TelegramNetworkError(str(exc)) from exc
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise TelegramNetworkError("respons Telegram bukan JSON") from exc
+        if not decoded.get("ok"):
+            code = int(decoded.get("error_code", 0) or 0)
+            desc = str(decoded.get("description") or "sendPhoto gagal")
+            raise TelegramNetworkError(f"Telegram API {code}: {desc}")
+        return decoded.get("result")
+
     def send_message(
         self,
         chat_id: int,
@@ -202,6 +258,8 @@ _ALIASES = {
     "wiki": "wiki",
     "dapat": "dapat",
     "saranfarm": "saranfarm",
+    "ss": "__screenshot__",
+    "resep": "resep",
     "pengaturan": "__settings__",
     "setting": "__settings__",
     "config": "__settings__",
@@ -226,6 +284,8 @@ def parse_telegram_command(text: str) -> tuple[str, Any]:
         return "__stop__", ""
     if verb in {"pengaturan", "setting", "config"}:
         return "__settings__", ""
+    if verb in {"ss", "screenshot", "kondisi"}:
+        return "__screenshot__", ""
     if verb == "gantiserver":
         return "__change_server__", arg
     if verb == "gantiakun":
@@ -271,6 +331,8 @@ def help_text() -> str:
         "/class, /weapon, /armor, /helm, /cape\n"
         "/wiki <item|lokasi|quest>\n"
         "/saranfarm <monster>\n"
+        "/ss - screenshot kondisi akun (karakter, map, kelas)\n"
+        "/resep <item> - pohon bahan merge dari wiki lokal\n"
         "/pengaturan - info akun, server, Telegram owner\n"
         "/gantiserver [nama_server] - ganti server (tanpa arg: daftar server)\n"
         "/gantiakun - petunjuk ganti akun (Hint: simpan dulu lewat terminal)\n"
@@ -343,6 +405,110 @@ class TelegramControl:
             if text:
                 outputs.append(text)
         return _bounded("\n".join(outputs) or "Semua aktivitas dihentikan.")
+
+    def _handle_screenshot(self, chat_id: int) -> None:
+        """Fetch a render of the current char from AQ Closet and send as photo."""
+        import urllib.request as _ur
+        orch = self.orch
+        bot = getattr(orch, "bot", None)
+        username = ""
+        if bot:
+            username = getattr(bot, "username", "") or ""
+        if not username:
+            try:
+                store = getattr(orch, "store", None)
+                if store:
+                    username, _ = store.load()
+            except Exception:
+                pass
+
+        if not username:
+            self.transport.send_message(
+                chat_id,
+                "Tidak bisa mengambil screenshot: username akun tidak diketahui.",
+                buttons=panel_buttons(),
+            )
+            return
+
+        # AQ Closet public render endpoint (char lookup -> outfit.png render)
+        char_url = f"https://aq.fanta.id/api/character?name={urllib.request.quote(username, safe='')}"
+        current_map = getattr(bot, "current_map", "N/A") if bot else "N/A"
+        state = getattr(bot, "state", "N/A") if bot else "N/A"
+
+        # Gather combat state for caption
+        combat = getattr(bot, "combat", None)
+        class_name = getattr(combat, "class_name", "?") if combat else "?"
+        level = getattr(bot, "level", "?") if bot else "?"
+
+        try:
+            # 1. Fetch character outfit data
+            with _ur.urlopen(_ur.Request(char_url, headers={"User-Agent": "skua-lite/1.0"}), timeout=10) as resp:
+                char_data = json.loads(resp.read().decode("utf-8"))
+            outfit = char_data.get("outfit") or {}
+            items_map = outfit.get("items") or {}
+            hair_data = outfit.get("hair") or {}
+            colors = outfit.get("colors") or {}
+            gender = "F" if str(outfit.get("gender", "M")).upper().startswith("F") else "M"
+
+            def _fmt(slot: str) -> str:
+                it = items_map.get(slot) or {}
+                return f"{it.get('name','')!s}|{it.get('file','')!s}|{it.get('link','')!s}"
+
+            def _col(key: str) -> str:
+                return str(colors.get(key) or "").replace("#", "")
+
+            params = [
+                ("g", gender),
+                ("armor", _fmt("armor")),
+                ("helm", _fmt("helm")),
+                ("cape", _fmt("cape")),
+                ("weapon", _fmt("weapon")),
+                ("pet", _fmt("pet")),
+                ("ground", _fmt("ground")),
+                ("hair", f"{hair_data.get('name','')!s}|{hair_data.get('file','')!s}"),
+                ("c_hair", _col("hair")),
+                ("c_skin", _col("skin")),
+                ("c_eye", _col("eye")),
+                ("c_base", _col("base")),
+                ("c_trim", _col("trim")),
+                ("c_accessory", _col("accessory")),
+            ]
+            qs = urllib.request.urlencode(params)
+            render_url = f"https://aq.fanta.id/api/outfit.png?{qs}"
+
+            # 2. Download the rendered PNG
+            with _ur.urlopen(_ur.Request(render_url, headers={"User-Agent": "skua-lite/1.0"}), timeout=20) as resp:
+                img_bytes = resp.read()
+            if len(img_bytes) < 100 or not img_bytes.startswith(b"\x89PNG"):
+                raise ValueError("bukan PNG valid")
+        except Exception as exc:
+            # Fallback: send text summary only
+            caption_text = (
+                f"=== KONDISI AKUN ===\n"
+                f"User      : {username}\n"
+                f"Level     : {level}\n"
+                f"Kelas     : {class_name}\n"
+                f"Map       : {current_map}\n"
+                f"Status    : {state}\n"
+                f"[Render gagal: {str(exc)[:120]}]"
+            )
+            self.transport.send_message(chat_id, caption_text, buttons=panel_buttons())
+            return
+
+        caption = (
+            f"👤 {username}  Lv.{level}\n"
+            f"⚔ {class_name}\n"
+            f"🗺 {current_map}\n"
+            f"ℹ {state}"
+        )
+        try:
+            self.transport.send_photo(chat_id, img_bytes, caption=caption, buttons=panel_buttons())
+        except Exception as exc:
+            self.transport.send_message(
+                chat_id,
+                f"Render tersedia tapi gagal kirim foto: {exc}\n{caption}",
+                buttons=panel_buttons(),
+            )
 
     def _settings_text(self) -> str:
         orch = self.orch
@@ -466,6 +632,8 @@ class TelegramControl:
             )
         elif action == "__stop__":
             self.transport.send_message(chat_id, self._execute_stop(), buttons=panel_buttons())
+        elif action == "__screenshot__":
+            self._handle_screenshot(chat_id)
         elif action == "__settings__":
             self.transport.send_message(
                 chat_id, self._settings_text(), buttons=self._settings_buttons()

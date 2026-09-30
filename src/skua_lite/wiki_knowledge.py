@@ -580,6 +580,126 @@ class WikiKnowledge:
         where = f"{loc['name']} {loc['join_cmd']}".strip()
         return f"{text} muncul di {where}. Mulai: .join {loc['name']} lalu .attack {text}"
 
+    def resolve_recipe(self, query: str, *, depth: int = 3) -> str | None:
+        """Resolve merge/craft ingredient tree up to `depth` levels.
+
+        Returns a plain-text multi-line tree, or None if the item is not found
+        or has no structured merge data.  Never recurses beyond `depth` so the
+        reply stays bounded even for deeply nested endgame items.
+        """
+        con = self._connection()
+        if con is None:
+            return None
+        wanted = self._clean_query(query)
+        if not wanted:
+            return None
+
+        # Resolve target item via the usual hit chain.
+        alias = ALIASES.get(wanted, wanted)
+        with self._lock:
+            item_row = con.execute(
+                "SELECT * FROM items WHERE name_cf=? OR base_name_cf=? "
+                "ORDER BY name_cf=? DESC, item_id LIMIT 1",
+                (alias, alias, alias),
+            ).fetchone()
+            if item_row is None:
+                item_row = self._fts_row(con, alias)
+            if item_row is None:
+                item_row = self._fuzzy_row(con, alias)
+        if item_row is None:
+            return None
+
+        lines: list[str] = []
+        seen: set[str] = set()
+        self._recipe_tree(con, item_row["name"], item_row["name_cf"],
+                          item_row["item_id"], lines, seen, depth, indent=0)
+        return "\n".join(lines) if lines else None
+
+    def _recipe_tree(
+        self,
+        con: sqlite3.Connection,
+        item_name: str,
+        item_cf: str,
+        item_id: int,
+        lines: list[str],
+        seen: set[str],
+        depth: int,
+        indent: int,
+    ) -> None:
+        prefix = "  " * indent
+        if indent == 0:
+            lines.append(f"Resep: {item_name}")
+
+        if depth == 0 or item_cf in seen:
+            if item_cf in seen:
+                lines.append(f"{prefix}  (lihat di atas)")
+            return
+        seen.add(item_cf)
+
+        with self._lock:
+            # Direct merge ingredients from item_merge_ingredients
+            direct_ings = con.execute(
+                "SELECT ing_name, ing_cf, ing_slug, qty FROM item_merge_ingredients "
+                "WHERE item_id=? ORDER BY rowid LIMIT 12",
+                (item_id,),
+            ).fetchall()
+
+            # Also check merge_items + merge_ingredients (shop-level)
+            shop_entry = con.execute(
+                "SELECT mi.entry_id, ms.name shop_name, ms.loc_name "
+                "FROM merge_items mi JOIN merge_shops ms ON ms.shop_id=mi.shop_id "
+                "WHERE mi.item_cf=? ORDER BY mi.entry_id LIMIT 1",
+                (item_cf,),
+            ).fetchone()
+            shop_ings = []
+            if shop_entry:
+                shop_ings = con.execute(
+                    "SELECT ing_name, ing_cf, slug, qty FROM merge_ingredients "
+                    "WHERE entry_id=? ORDER BY rowid LIMIT 12",
+                    (shop_entry["entry_id"],),
+                ).fetchall()
+
+        # direct_ings wins when non-empty; shop_ings is the fallback.
+        # If both are non-empty (rare), direct_ings takes precedence;
+        # the shop header at indent==0 is still shown from shop_entry.
+        ings = direct_ings or shop_ings
+        if shop_entry and indent == 0:
+            loc = self._location_text(con, shop_entry["loc_name"])
+            where = f" ({loc})" if loc else ""
+            lines.append(f"  Merge di: {shop_entry['shop_name']}{where}")
+
+        if not ings:
+            # No known ingredients: show source from items table directly
+            with self._lock:
+                item_row = con.execute(
+                    "SELECT * FROM items WHERE name_cf=? LIMIT 1", (item_cf,)
+                ).fetchone()
+            if item_row:
+                src = item_row["price_kind"] or "unknown"
+                ref = item_row["price_ref_name"] or ""
+                tag = f" ({ref})" if ref else ""
+                lines.append(f"{prefix}  ├─ {item_name}: dari {src}{tag}")
+            else:
+                lines.append(f"{prefix}  ├─ {item_name}: sumber tidak diketahui")
+            return
+
+        for i, ing in enumerate(ings):
+            connector = "└─" if i == len(ings) - 1 else "├─"
+            qty = ing["qty"]
+            ing_name = ing["ing_name"]
+            lines.append(f"{prefix}  {connector} {ing_name} x{qty}")
+            # Recurse into ingredient if it is itself a merge item
+            ing_cf_key = ing["ing_cf"] if "ing_cf" in ing.keys() else _norm(ing_name)
+            with self._lock:
+                child_row = con.execute(
+                    "SELECT * FROM items WHERE name_cf=? LIMIT 1", (ing_cf_key,)
+                ).fetchone()
+            if child_row and depth > 0:
+                self._recipe_tree(
+                    con, ing_name, ing_cf_key, child_row["item_id"],
+                    lines, seen, depth - 1, indent + 1,
+                )
+
     def _location_fuzzy(self, con: sqlite3.Connection, query: str) -> sqlite3.Row | None:
         token = next((t for t in _WORD_RE.findall(query) if len(t) >= 4), "")
         if not token:

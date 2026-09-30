@@ -263,7 +263,7 @@ def print_farm_help() -> None:
     print("  .equip <nomor|nama>         -> pakai item")
     print("  .drop / .rest / .booster / .aggro / .quest / .sell / .bank")
     print("INFO")
-    print("  .status / .area / .dapat <item> / .wiki <item|lokasi|quest>")
+    print("  .status / .area / .dapat <item> / .wiki <item|lokasi|quest> / .resep <item>")
     print("  .saranfarm <monster>        -> cari map monster dari wiki")
     print("  .tambahakun <user> <pass>   -> simpan akun terenkripsi untuk Telegram")
     print("Tanpa -private = room publik; -private = room 100000.")
@@ -354,7 +354,7 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         "status", "st", "join", "move", "drop", "rest", "booster", "aggro",
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
         "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
-        "weapon", "armor", "helm", "cape", "level", "leveling", "dapat", "wiki",
+        "weapon", "armor", "helm", "cape", "level", "leveling", "dapat", "wiki", "resep",
         "saranfarm", "tambahakun", "help", "dashboard", "ui",
     }
     if action not in known:
@@ -557,6 +557,14 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
             else:
                 print("[WARN] tujuan auto tidak dikenal. Contoh: auto cari Bone x5 dari Skeleton")
                 return None
+        elif action == "resep":
+            if not arg.strip():
+                raise ValueError("format: .resep <nama item>")
+            tree = _farm_wiki(orch).resolve_recipe(arg.strip(), depth=3)
+            if tree is None:
+                print("[RESEP] item tidak ditemukan atau tidak ada bahan di database.")
+            else:
+                print(f"[RESEP] {tree}")
         elif action in {"dapat", "wiki"}:
             if not arg.strip():
                 raise ValueError("format: .dapat <nama item>")

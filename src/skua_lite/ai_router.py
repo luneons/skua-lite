@@ -103,6 +103,31 @@ def is_owner_id(user_id: int | None) -> bool:
     return user_id is not None and int(user_id) in _OWNER_IDS
 
 
+class RateLimiter:
+    """Thread-safe per-key monotonic rate limiter / cooldown tracker."""
+
+    def __init__(self, cooldown: float = 3.0) -> None:
+        self.cooldown = float(cooldown)
+        self._last_seen: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str, now: float | None = None) -> bool:
+        current = time.monotonic() if now is None else float(now)
+        with self._lock:
+            if len(self._last_seen) > 200:
+                cutoff = current - max(60.0, self.cooldown * 2)
+                self._last_seen = {k: v for k, v in self._last_seen.items() if v > cutoff}
+            last = self._last_seen.get(key, 0.0)
+            if current - last < self.cooldown:
+                return False
+            self._last_seen[key] = current
+            return True
+
+    def reset(self) -> None:
+        with self._lock:
+            self._last_seen.clear()
+
+
 def owner_name_for_id(user_id: int | None) -> str | None:
     return _OWNER_IDS.get(int(user_id)) if is_owner_id(user_id) else None
 
@@ -381,6 +406,9 @@ class AIChatRouter:
                 self._wiki = WikiKnowledge(default_wiki_db_path())
             except Exception:  # noqa: BLE001 - wiki is optional
                 self._wiki = None
+        # Public wiki commands are rate-limited per sender to prevent chat spam.
+        # Owner UIDs are always bypassed.
+        self._wiki_rate_limiter = RateLimiter(cooldown=3.0)
         # Optional single-turn researcher that follows the RESEARCH: marker.
         self._researcher = researcher
         self._research_seen_keys: set[str] = set()
@@ -683,7 +711,11 @@ class AIChatRouter:
                 and admin_command[0] in PUBLIC_WIKI_COMMANDS
             )
             if public_wiki_command and self._admin_inbox is not None:
-                return self._admin_inbox.submit(sender, text, self._send_chat)
+                # Bypass owner lock only when the sender is not rate-limited.
+                sender_key = str(sender_id) if sender_id is not None else sender
+                if is_owner_id(sender_id) or self._wiki_rate_limiter.allow(sender_key):
+                    return self._admin_inbox.submit(sender, text, self._send_chat)
+                return False
             if self._owner_lock and not owner:
                 return False
             if normalized == "MODE NORMAL" and owner and self._owner_lock:

@@ -143,3 +143,67 @@ def test_public_wiki_commands_do_not_grant_other_admin_tools(tmp_path):
     tools.web_search.assert_not_called()
     tools.run_code.assert_not_called()
     assert not done.wait(0.2)
+
+
+def test_public_wiki_command_rate_limits_spamming_non_owners(tmp_path):
+    db = tmp_path / "wiki.db"
+    build_wiki_database(_source_dir(tmp_path), db)
+    sent: list[str] = []
+    done = threading.Event()
+    handler = AdminCommandHandler(tools=AgentTools(tmp_path), wiki=WikiKnowledge(db))
+    router = AIChatRouter(
+        generator=lambda _text: "should not invoke model",
+        send_chat=lambda text: (sent.append(text), done.set()),
+        admin_handler=handler,
+    )
+
+    # First call succeeds
+    assert router.handle_message("!dapat Burning Blade", "Spammer", sender_id=999) is True
+    assert done.wait(2)
+    assert len(sent) == 1
+    done.clear()
+
+    # Immediate second call from same non-owner is dropped by rate limiter
+    assert router.handle_message("!dapat Legion Token", "Spammer", sender_id=999) is False
+    assert not done.wait(0.2)
+    assert len(sent) == 1
+
+    # Different sender is not blocked
+    assert router.handle_message("!dapat Legion Token", "OtherGuy", sender_id=888) is True
+    assert done.wait(2)
+    assert len(sent) == 2
+
+def test_admin_resep_returns_merge_ingredient_tree(tmp_path):
+    from unittest.mock import Mock
+
+    tools = Mock(spec=AgentTools)
+    handler = AdminCommandHandler(tools=tools, wiki=_wiki(tmp_path))
+
+    outcome = handler.handle("MELE", "!resep ArchFiend Spear")
+
+    assert outcome.consumed is True
+    assert "ArchFiend Spear" in outcome.reply
+    # Fixture merge shop ingredient must appear
+    assert "Fiend Token" in outcome.reply
+    assert "Fiend Merge" in outcome.reply
+    assert len(outcome.reply) <= 500
+    tools.web_search.assert_not_called()
+
+
+def test_admin_resep_unknown_item_is_honest(tmp_path):
+    from unittest.mock import Mock
+
+    handler = AdminCommandHandler(
+        tools=Mock(spec=AgentTools), wiki=_wiki(tmp_path)
+    )
+
+    outcome = handler.handle("MELE", "!resep Definitely Not A Real Item xyzzy")
+
+    assert outcome.consumed is True
+    assert "tidak" in outcome.reply.lower()
+
+
+def test_public_wiki_commands_include_resep():
+    from skua_lite.admin_commands import PUBLIC_WIKI_COMMANDS
+
+    assert {"dapat", "item", "quest", "shop", "resep"} <= PUBLIC_WIKI_COMMANDS

@@ -61,10 +61,10 @@ def resolve_room_target(map_name: str, *, private: bool) -> str:
 
 
 _COMMANDS = (
-    "cari", "dapat", "item", "quest", "shop", "farm", "upgrade", "exec", "run",
+    "cari", "dapat", "item", "quest", "shop", "resep", "farm", "upgrade", "exec", "run",
     "join", "move", "status", "bantuan", "help", "admin",
 )
-PUBLIC_WIKI_COMMANDS = frozenset({"dapat", "item", "quest", "shop"})
+PUBLIC_WIKI_COMMANDS = frozenset({"dapat", "item", "quest", "shop", "resep"})
 
 
 def parse_admin_command(message: str) -> tuple[str, str] | None:
@@ -123,6 +123,8 @@ class AdminCommandHandler:
             return AdminOutcome(True, self._blocking(self.tools.web_search, arg, arg))
         if verb in ("dapat", "item", "quest", "shop"):
             return AdminOutcome(True, self._wiki_lookup(arg, kind=verb))
+        if verb == "resep":
+            return AdminOutcome(True, self._wiki_recipe(arg))
         if verb == "farm":
             return AdminOutcome(True, self._farm_suggestion(arg))
         if verb == "upgrade":
@@ -168,6 +170,22 @@ class AdminCommandHandler:
         if hit is None:
             return "Tidak ketemu di wiki lokal. Coba !cari <nama>."
         return self._clamp(hit.short_answer(150))
+
+    def _wiki_recipe(self, query: str) -> str:
+        """Resolve a multi-level material tree for a merge/craft item (<= 3 levels deep)."""
+        text = (query or "").strip()
+        if not text:
+            return "Format: !resep <nama item>, misal !resep Void Highlord"
+        if self.wiki is None or not self.wiki.ready:
+            return "Database wiki belum siap. Jalankan scripts/update_aqw_knowledge.py dulu."
+        try:
+            tree = self.wiki.resolve_recipe(text, depth=3)
+        except Exception as exc:  # noqa: BLE001
+            self.on_log(f"[ADMIN] recipe error: {exc}")
+            return "Gagal membaca resep."
+        if tree is None:
+            return f"'{text}' tidak ditemukan atau bukan item merge/craft di wiki lokal."
+        return self._clamp(tree, limit=500)
 
     def _farm_suggestion(self, query: str) -> str:
         """Suggest only a wiki-proven map target; never invents monsters/maps."""

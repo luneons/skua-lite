@@ -34,6 +34,10 @@ class FakeTransport:
             return self._updates.pop(0)
         raise tg.TelegramNetworkError("tidak ada update")
 
+    def send_photo(self, chat_id, image_bytes, *, caption="", buttons=None):
+        self.sent.append((chat_id, f"[PHOTO: {len(image_bytes)}b] {caption}", buttons))
+        return {"message_id": len(self.sent)}
+
     def send_message(self, chat_id, text, *, buttons=None):
         self.sent.append((chat_id, text, buttons))
         return {"message_id": len(self.sent)}
@@ -473,3 +477,45 @@ class _StopAfter:
     def wait(self, timeout: float) -> bool:
         self.calls += 1
         return self.is_set()
+
+def test_screenshot_command_parses_as_special():
+    assert tg.parse_telegram_command("/ss") == ("__screenshot__", "")
+    assert tg.parse_telegram_command("/screenshot") == ("__screenshot__", "")
+    assert tg.parse_telegram_command("/kondisi") == ("__screenshot__", "")
+
+
+def test_screenshot_without_known_username_warns_cleanly():
+    transport = FakeTransport()
+    calls = []
+    control = _control(transport, calls)
+
+    control.handle_message(_message("/ss"))
+
+    assert len(transport.sent) == 1
+    chat_id, text, _ = transport.sent[0]
+    assert chat_id == 99
+    assert "username" in text.lower()
+
+
+def test_screenshot_with_bot_username_falls_back_cleanly_on_offline_render():
+    transport = FakeTransport()
+    calls = []
+    orch = SimpleNamespace(
+        bot=SimpleNamespace(
+            username="TestHero",
+            current_map="battleon",
+            state="IDLE",
+            level=100,
+            combat=SimpleNamespace(class_name="Void Highlord"),
+        )
+    )
+    control = _control(transport, calls, orch=orch)
+
+    # Calling /ss when network is offline triggers fallback text summary
+    control.handle_message(_message("/ss"))
+
+    assert len(transport.sent) == 1
+    _, text, _ = transport.sent[0]
+    assert "TestHero" in text
+    assert "Void Highlord" in text
+    assert "battleon" in text
