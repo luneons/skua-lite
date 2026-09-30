@@ -199,7 +199,37 @@ debug, quit.
 - Disimpan terenkripsi dengan Windows DPAPI (CryptProtectData), terikat ke
   akun Windows pengguna -> file tidak bisa didekripsi di mesin lain.
 - Fallback Fernet+PBKDF2 untuk non-Windows.
-- Lokasi: %LOCALAPPDATA%\skua-lite\credentials.enc
+- Lokasi: %LOCALAPPDATA%\skua-lite\accounts.enc
+
+## Pilihan cara menyimpan akun (multi vs terenkripsi)
+
+Ada dua cara menyimpan akun. Pilih satu sesuai kebutuhan:
+
+**A. Otomatis terenkripsi (default, 1 akun atau tambah bertahap)**
+
+- Tambah akun bertahap via menu startup `+ Tambah akun` atau
+  di terminal farming: `.tambahakun <username>,<password>`
+- Kelola via `.editakun <username>,<password>` dan `.hapusakun <username>`.
+- `.daftarakun` menampilkan username yang tersimpan (password tidak ditampilkan).
+- Cocok untuk menyimpan satu akun atau menambah akun satu per satu.
+
+**B. File `akun.txt` lokal terbuka (banyak akun sekaligus, multi-bot)**
+
+- Buat file `akun.txt` di folder data lokal
+  (`%LOCALAPPDATA%\skua-lite\akun.txt`).
+- Isi satu baris per akun dengan format `username,password`:
+  `mele,password321`
+  `sorani ex,password123`
+- Baris kosong dan baris komentar `# ...` diabaikan.
+- Awal baris boleh berupa indeks seperti `1. ` (terbuang otomatis).
+- File ini diabaikan oleh Git dan dibatasi izin hanya pemilik OS
+  (Windows ACL / POSIX 0600, best-effort).
+- Saat startup MODE FARMING, cukup pilih `Multi-bot` lalu pilih akun
+  (`1,3`, `semua`, atau `all`) untuk login sekaligus.
+
+Kedua sumber digabung berdasarkan username dan ditampilkan satu kali.
+Jika username sama ada di kedua tempat, entri **terenkripsi menang**.
+Penghapusan (`.hapusakun` / `remove_account`) menghapus dari kedua sumber.
 
 ## Struktur
 

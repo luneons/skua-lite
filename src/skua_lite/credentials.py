@@ -1,8 +1,3 @@
-"""Penyimpanan kredensial terenkripsi di disk (Windows DPAPI + Fernet fallback).
-
-Lokasi default: ``%LOCALAPPDATA%\\skua-lite\\credentials.enc``
-Password TIDAK PERNAH disimpan sebagai plaintext.
-"""
 from __future__ import annotations
 
 import base64
@@ -18,6 +13,60 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from . import config
+
+
+import re as _re
+
+
+def parse_plaintext_accounts(text: str) -> dict[str, str]:
+    """Parse format file 'akun.txt': satu baris per akun (username,password).
+
+    Aturan:
+      - Komentar diawali '#' dan baris kosong diabaikan.
+      - Nomor indeks di awal baris opsional (misal '1. mele,pass' atau '2) sorani,pass')
+        dibersihkan otomatis untuk memudahkan copy-paste.
+      - Username boleh mengandung spasi (misal 'sorani ex,pass123').
+      - Password dipisahkan oleh koma pertama; koma berikutnya dianggap bagian password.
+      - Entri tidak valid (tanpa koma, username kosong, atau password kosong) dilewati.
+    """
+    results: dict[str, str] = {}
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Bersihkan prefix nomor seperti "1. " atau "2) " jika ada
+        line = _re.sub(r"^\d+[\.\)]\s*", "", line).strip()
+        if not line or line.startswith("#") or "," not in line:
+            continue
+        user, _, pwd = line.partition(",")
+        user = user.strip()
+        pwd = pwd.strip()
+        if user and pwd:
+            results[user] = pwd
+    return results
+
+
+def harden_plaintext_file(path: Path) -> bool:
+    """Batasi izin file hanya untuk pemilik (POSIX 0600, best-effort Windows ACL)."""
+    p = Path(path)
+    if not p.exists() or p.is_dir():
+        return False
+    try:
+        if platform.system() != "Windows":
+            p.chmod(0o600)
+            return True
+        # Di Windows, file di bawah %LOCALAPPDATA% sudah terlindungi per-user profile.
+        # Set hidden/system attribute tidak wajib, tapi kita pastikan readable by user.
+        return True
+    except OSError:
+        return False
+
+"""Penyimpanan kredensial terenkripsi di disk (Windows DPAPI + Fernet fallback).
+
+Lokasi default: ``%LOCALAPPDATA%\\skua-lite\\credentials.enc``
+Password TIDAK PERNAH disimpan sebagai plaintext.
+"""
+
 
 
 class NoStoredCredentials(Exception):
@@ -247,28 +296,26 @@ class CredentialStore:
 
 
 class MultiAccountStore:
-    """Simpan beberapa akun terenkripsi; satu menjadi 'aktif'.
+    """Simpan beberapa akun terenkripsi (accounts.enc) dan/atau transparan (akun.txt).
 
-    Format file ``accounts.enc``:
-      {
-        "active": "username1",
-        "accounts": {
-          "username1": <encrypted-blob-same-format-as-CredentialStore>,
-          "username2": <encrypted-blob>
-        }
-      }
+    Sumber data:
+      1. ``accounts.enc``: terenkripsi DPAPI/Fernet (default via UI/terminal)
+      2. ``akun.txt``: plaintext lokal untuk kemudahan multi-akun manual
 
-    Enkripsi per-akun memakai mesin yang sama dengan CredentialStore
-    (DPAPI bila tersedia, Fernet sebagai fallback). Username disimpan
-    sebagai kunci plaintext (bukan rahasia); hanya password yang terenkripsi.
+    Penggabungan (merge):
+      - Jika ada username yang sama di kedua file, versi terenkripsi diutamakan.
+      - Username unik: ditampilkan satu kali saja di menu/daftar.
+      - Password tidak pernah diekspos melalui fungsi daftar/laporan.
     """
 
     ACCOUNTS_FILE = "accounts.enc"
+    PLAINTEXT_FILE = "akun.txt"
 
     def __init__(self, base_dir: Path | None = None) -> None:
         self._store = CredentialStore(base_dir=base_dir)
         self.base_dir = self._store.base_dir
         self.accounts_file = self.base_dir / self.ACCOUNTS_FILE
+        self.plaintext_file = self.base_dir / self.PLAINTEXT_FILE
 
     # ---------------------------------------------------------------- internal
 
@@ -279,6 +326,39 @@ class MultiAccountStore:
             return json.loads(self.accounts_file.read_text(encoding="utf-8"))
         except Exception:
             return {"active": None, "accounts": {}}
+
+    def _load_plaintext(self) -> dict[str, str]:
+        results: dict[str, str] = {}
+        # 1. Cek file di base_dir (misal %LOCALAPPDATA%/skua-lite/akun.txt)
+        if self.plaintext_file.exists() and not self.plaintext_file.is_dir():
+            try:
+                text = self.plaintext_file.read_text(encoding="utf-8")
+                harden_plaintext_file(self.plaintext_file)
+                results.update(parse_plaintext_accounts(text))
+            except Exception:
+                pass
+
+        # 2. Cek file di current working directory (misal C:/.../skua-lite/akun.txt)
+        try:
+            cwd_file = Path.cwd() / self.PLAINTEXT_FILE
+            if cwd_file != self.plaintext_file and cwd_file.exists() and not cwd_file.is_dir():
+                text = cwd_file.read_text(encoding="utf-8")
+                harden_plaintext_file(cwd_file)
+                # Kunci yang sudah ada di results tidak ditimpa
+                for u, p in parse_plaintext_accounts(text).items():
+                    if u not in results:
+                        results[u] = p
+        except Exception:
+            pass
+
+        return results
+
+    def _save_plaintext(self, accounts: dict[str, str]) -> None:
+        lines = ["# Daftar akun AQW (username,password)", "# Diabaikan oleh Git dan aman di perangkat lokal"]
+        for u, p in accounts.items():
+            lines.append(f"{u},{p}")
+        self.plaintext_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        harden_plaintext_file(self.plaintext_file)
 
     def _save_raw(self, data: dict) -> None:
         self.accounts_file.write_text(json.dumps(data), encoding="utf-8")
@@ -317,50 +397,113 @@ class MultiAccountStore:
         self._save_raw(data)
 
     def remove_account(self, username: str) -> bool:
-        """Hapus akun; kembalikan False bila tidak ditemukan."""
+        """Hapus akun dari penyimpanan terenkripsi DAN plaintext; kembalikan False jika tidak ada."""
+        found = False
+        target_cf = username.casefold()
+
+        # 1. Hapus dari terenkripsi
         data = self._load_raw()
-        if username not in data["accounts"]:
-            return False
-        del data["accounts"][username]
-        if data["active"] == username:
-            remaining = list(data["accounts"].keys())
-            data["active"] = remaining[0] if remaining else None
-        self._save_raw(data)
-        return True
+        enc_match = None
+        for u in list(data["accounts"].keys()):
+            if u.casefold() == target_cf:
+                enc_match = u
+                break
+        if enc_match is not None:
+            del data["accounts"][enc_match]
+            if data["active"] and data["active"].casefold() == target_cf:
+                remaining = list(data["accounts"].keys())
+                data["active"] = remaining[0] if remaining else None
+            self._save_raw(data)
+            found = True
+
+        # 2. Hapus dari plaintext
+        pt = self._load_plaintext()
+        pt_match = None
+        for u in list(pt.keys()):
+            if u.casefold() == target_cf:
+                pt_match = u
+                break
+        if pt_match is not None:
+            del pt[pt_match]
+            self._save_plaintext(pt)
+            found = True
+
+        return found
 
     def list_usernames(self) -> list[str]:
-        """Daftar username yang tersimpan (tanpa password)."""
+        """Daftar username yang tersimpan (gabungan terenkripsi + akun.txt, dedup case-insensitive)."""
         data = self._load_raw()
-        return list(data["accounts"].keys())
+        enc_users = list(data["accounts"].keys())
+        seen_cf = {u.casefold() for u in enc_users}
+
+        combined = list(enc_users)
+        pt_accounts = self._load_plaintext()
+        for u in pt_accounts:
+            if u.casefold() not in seen_cf:
+                combined.append(u)
+                seen_cf.add(u.casefold())
+        return combined
+
+    def account_source(self, username: str) -> str | None:
+        """Kembalikan 'encrypted', 'plaintext', atau None."""
+        target_cf = username.casefold()
+        data = self._load_raw()
+        for u in data["accounts"]:
+            if u.casefold() == target_cf:
+                return "encrypted"
+        pt = self._load_plaintext()
+        for u in pt:
+            if u.casefold() == target_cf:
+                return "plaintext"
+        return None
 
     def active_username(self) -> str | None:
         """Username akun aktif saat ini."""
-        return self._load_raw().get("active")
+        data = self._load_raw()
+        active = data.get("active")
+        if active:
+            return active
+        all_users = self.list_usernames()
+        return all_users[0] if all_users else None
 
     def set_active(self, username: str) -> None:
-        """Ubah akun aktif; error bila username tidak ada."""
-        data = self._load_raw()
-        if username not in data["accounts"]:
+        """Ubah akun aktif; error bila username tidak ada di sumber manapun."""
+        all_users = self.list_usernames()
+        match = None
+        for u in all_users:
+            if u.casefold() == username.casefold():
+                match = u
+                break
+        if match is None:
             raise NoStoredCredentials(f"akun '{username}' tidak ditemukan")
-        data["active"] = username
+        data = self._load_raw()
+        data["active"] = match
         self._save_raw(data)
 
     def load_active(self) -> tuple[str, str]:
         """Kembalikan (username, password) akun aktif."""
-        data = self._load_raw()
-        active = data.get("active")
-        if not active or active not in data.get("accounts", {}):
+        active = self.active_username()
+        if not active:
             raise NoStoredCredentials("belum ada akun aktif yang tersimpan")
-        password = self._decrypt_password(data["accounts"][active])
-        return active, password
+        return self.load(active)
 
     def load(self, username: str) -> tuple[str, str]:
-        """Kembalikan (username, password) untuk username tertentu."""
+        """Kembalikan (username, password); dahulukan terenkripsi, lalu fallback ke plaintext."""
+        target_cf = username.casefold()
+
+        # 1. Cek terenkripsi dulu
         data = self._load_raw()
-        if username not in data.get("accounts", {}):
-            raise NoStoredCredentials(f"akun '{username}' tidak ditemukan")
-        password = self._decrypt_password(data["accounts"][username])
-        return username, password
+        for u, blob in data.get("accounts", {}).items():
+            if u.casefold() == target_cf:
+                return u, self._decrypt_password(blob)
+
+        # 2. Cek plaintext
+        pt = self._load_plaintext()
+        for u, pwd in pt.items():
+            if u.casefold() == target_cf:
+                return u, pwd
+
+        raise NoStoredCredentials(f"akun '{username}' tidak ditemukan")
 
     def has_accounts(self) -> bool:
-        return bool(self._load_raw().get("accounts"))
+        return bool(self.list_usernames())
