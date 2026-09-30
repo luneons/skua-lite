@@ -291,6 +291,16 @@ def get_drop_packet(room: int, drop_id: int) -> bytes:
     return xt_str("zm", "getDrop", [int(drop_id)], room)
 
 
+def get_map_item_packet(room: int, map_item_id: int) -> bytes:
+    """Collect one quest map-item using AQW's verified getMapItem wire."""
+    return xt_str("zm", "getMapItem", [int(map_item_id)], room)
+
+
+def get_quests_packet(room: int, quest_id: int) -> bytes:
+    """Request authoritative server data for one quest after acceptance."""
+    return xt_str("zm", "getQuests", [int(quest_id)], room)
+
+
 def rest_packet() -> bytes:
     """Sit down and start resting (``World.rest`` -> ``emotea rest``).
 

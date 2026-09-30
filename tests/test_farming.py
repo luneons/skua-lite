@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from skua_lite import farming, sfs
+from skua_lite.quest_state import QuestState
 from skua_lite.auto_planner import AutoGoal, AutoPlanner
 from skua_lite.combat import MonsterState
 from skua_lite.mode import RunMode
@@ -99,6 +100,18 @@ def test_bank_packets_wire_format():
     assert body == "%xt%zm%bankSwapInv%273%1%2%3%4%"
 
 
+def test_get_map_item_packet_wire_format():
+    assert _wire(sfs.get_map_item_packet(room=273, map_item_id=8206)) == (
+        "%xt%zm%getMapItem%273%8206%"
+    )
+
+
+def test_get_quests_packet_wire_format():
+    assert _wire(sfs.get_quests_packet(room=273, quest_id=7985)) == (
+        "%xt%zm%getQuests%273%7985%"
+    )
+
+
 def test_try_quest_complete_packet_wire_format():
     body = _wire(
         sfs.try_quest_complete_packet(room=273, quest_id=101, reward_id=5, turn_ins="1,2")
@@ -108,6 +121,235 @@ def test_try_quest_complete_packet_wire_format():
 
 def test_aggro_mon_packet_wire_format():
     assert _wire(sfs.aggro_mon_packet(room=273, map_ids=[7, 9])) == "%xt%zm%aggroMon%273%7%9%"
+
+
+def test_quest_state_tracks_accept_reject_and_completion():
+    state = QuestState()
+    ok = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7980,"msg":"success"}}}'
+    locked = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7985,"msg":"Missing requirement"}}}'
+    complete = '{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":1,"QuestID":7980,"msg":"success"}}}'
+
+    assert state.feed(ok)
+    assert state.accepted(7980)
+    assert state.feed(locked)
+    assert state.rejected(7985)
+    assert state.reason(7985) == "Missing requirement"
+    assert state.feed(complete)
+    assert state.completed(7980)
+    assert not state.accepted(7980)
+
+
+def test_quest_state_learns_loaded_quest_data():
+    state = QuestState()
+    packet = '{"t":"xt","b":{"r":-1,"o":{"cmd":"getQuests","quests":{"7981":{"QuestID":7981,"sName":"Mega War Medals"}}}}}'
+    assert state.feed(packet)
+    assert state.accepted(7981)
+    assert state.data(7981)["sName"] == "Mega War Medals"
+
+
+def test_farming_runtime_feeds_quest_state_from_server():
+    bot = Mock(username="alice", session_user_id=1, room_id=42, move_on_join=None)
+    runtime = farming.FarmingRuntime(bot=bot)
+    packet = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7980,"msg":"success"}}}'
+    runtime.feed_packet(packet)
+    assert runtime.quest_state.accepted(7980)
+
+
+def test_live_scw_accept_packet_marks_gate_available_and_requests_data():
+    """A captured Yorumi success response makes the gate authoritative."""
+    bot = Mock(username="alice", session_user_id=1, room_id=42, move_on_join=None)
+    runtime = farming.FarmingRuntime(bot=bot)
+    runtime._send = Mock()
+    packet = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7985,"msg":"success"}}}'
+
+    runtime.feed_packet(packet)
+
+    assert runtime.quest_state.accepted(7985)
+    sent = runtime._send.call_args.args[0].rstrip(b"\x00").decode("latin-1")
+    assert sent == "%xt%zm%getQuests%42%7985%"
+    assert runtime.auto_level_spot().map_name == "sevencircleswar"
+
+
+def test_scw_dependency_planner_uses_best_spot_only_after_gate():
+    from skua_lite.scw import SCWDependencyPlanner
+
+    quests = QuestState()
+    planner = SCWDependencyPlanner(quests)
+    assert planner.best_xp_spot() is None
+    assert planner.next_prerequisite().quest_id == 7968
+
+    accepted = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7985,"msg":"success"}}}'
+    quests.feed(accepted)
+    spot = planner.best_xp_spot()
+    assert (spot.map_name, spot.cell, spot.quests) == (
+        "sevencircleswar", "r9", (7980, 7981, 7985)
+    )
+
+
+def test_scw_dependency_chain_orders_story_before_war():
+    from skua_lite.scw import SEVEN_CIRCLES_CHAIN
+
+    ids = [step.quest_id for step in SEVEN_CIRCLES_CHAIN]
+    assert ids[:10] == [7968, 7969, 7970, 7971, 7972, 7973, 7974, 7975, 7976, 7977]
+    assert ids[10:] == [7979, 7980, 7981, 7982, 7983, 7984, 7985]
+    assert SEVEN_CIRCLES_CHAIN[4].map_item_id == 8206
+
+
+def test_leveling_loop_probes_scw_gate_before_combat(monkeypatch):
+    import threading
+
+    bot = Mock(level=8, current_map="sevencircleswar-100000", room_id=42)
+    runtime = farming.FarmingRuntime(bot=bot)
+    state = Mock(cell="r9", map_file_name="sevencircleswar.swf")
+    runtime.combat = Mock(state=state, running=True)
+    runtime._send = Mock()
+    runtime._leveling_target = 100
+    runtime._leveling_stop.clear()
+
+    old_sleep = time.sleep
+    monkeypatch.setattr(time, "sleep", lambda _s: old_sleep(0.01))
+    thread = threading.Thread(target=runtime._leveling_loop)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while not runtime._send.called and time.monotonic() < deadline:
+        old_sleep(0.02)
+    runtime._leveling_stop.set()
+    thread.join(timeout=1)
+
+    bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
+    assert "%xt%zm%acceptQuest%42%7985%" in bodies
+    assert "%xt%zm%acceptQuest%42%4007%" in bodies
+    assert all("%7980%" not in body and "%7981%" not in body for body in bodies)
+
+
+def test_scw_rejected_probe_suspends_level_goal_for_story_prerequisite():
+    bot = Mock(level=8)
+    runtime = farming.FarmingRuntime(bot=bot)
+    rejected = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7985,"msg":"Missing requirement"}}}'
+    runtime.feed_packet(rejected)
+
+    assert runtime.auto_level_spot().map_name == "sevencircles"
+    assert runtime.leveling_dependency.quest_id == 7968
+
+
+def test_story_executor_runs_first_missing_quest_then_combat():
+    from skua_lite.scw import SCWStoryExecutor
+
+    bot = Mock(level=8, room_id=42)
+    runtime = farming.FarmingRuntime(bot=bot)
+    runtime._send = Mock()
+    executor = SCWStoryExecutor(runtime)
+
+    step = executor.next_step()
+    assert step.quest_id == 7968
+    assert step.map_name == "sevencircles"
+    executor.execute_step(step)
+    accept = runtime._send.call_args_list[0].args[0]
+    body = accept.rstrip(b"\x00").decode("latin-1")
+    assert body == "%xt%zm%acceptQuest%42%7968%"
+    assert executor.plan_remaining()[1].quest_id == 7969
+
+
+def test_story_executor_fetches_map_item_for_map_item_quest():
+    from skua_lite.scw import QuestStep, SCWStoryExecutor
+
+    bot = Mock(level=8, room_id=7)
+    runtime = farming.FarmingRuntime(bot=bot)
+    runtime._send = Mock()
+    executor = SCWStoryExecutor(runtime)
+    step = QuestStep(7972, "sevencircles", map_item_id=8206, map_item_count=3)
+    executor.execute_step(step)
+
+    bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
+    assert "%xt%zm%acceptQuest%7%7972%" in bodies
+    assert bodies.count("%xt%zm%getMapItem%7%8206%") == 3
+
+
+def test_story_executor_completes_only_finished_requirements():
+    from skua_lite.scw import SCWStoryExecutor
+
+    bot = Mock(level=8, room_id=42)
+    runtime = farming.FarmingRuntime(bot=bot)
+    runtime._send = Mock()
+    executor = SCWStoryExecutor(runtime)
+
+    executor.note_turn_in_rejected(7968, "Missing Quest Progress")
+    assert executor.next_step().quest_id == 7968
+
+    executor.note_turn_in_ready(7968)
+    executor.execute_step(executor.next_step())
+    bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
+    assert "%xt%zm%tryQuestComplete%42%7968%-1%false%%wvz%" in bodies
+
+def test_leveling_probe_promotes_to_scw_farm_after_gate_accepted(monkeypatch):
+    import threading
+
+    bot = Mock(level=8, current_map="sevencircleswar-100000", room_id=42)
+    runtime = farming.FarmingRuntime(bot=bot)
+    state = Mock(cell="r9", map_file_name="sevencircleswar.swf")
+    runtime.combat = Mock(state=state, running=True)
+    runtime._send = Mock()
+    runtime.feed_packet(
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7985,"msg":"success"}}}'
+    )
+    runtime._send.reset_mock()
+    runtime._leveling_target = 100
+    runtime._leveling_stop.clear()
+
+    old_sleep = time.sleep
+    monkeypatch.setattr(time, "sleep", lambda _s: old_sleep(0.01))
+    thread = threading.Thread(target=runtime._leveling_loop)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while not runtime._send.called and time.monotonic() < deadline:
+        old_sleep(0.02)
+    runtime._leveling_stop.set()
+    thread.join(timeout=1)
+
+    bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
+    assert "%xt%zm%acceptQuest%42%7980%" in bodies
+    assert "%xt%zm%acceptQuest%42%7981%" in bodies
+
+
+def test_scw_story_step_completes_before_returning_to_farm():
+    bot = Mock(level=8, room_id=42)
+    runtime = farming.FarmingRuntime(bot=bot)
+    runtime.feed_packet(
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7985,"msg":"Missing requirement"}}}'
+    )
+    runtime.feed_packet(
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":1,"QuestID":7968,"msg":"success"}}}'
+    )
+    assert runtime.auto_level_spot().quests == (7969,)
+
+
+def test_leveling_loop_retries_story_step_until_completion_then_advances(monkeypatch):
+    import threading
+
+    bot = Mock(level=8, current_map="sevencircles-100000", room_id=42)
+    runtime = farming.FarmingRuntime(bot=bot)
+    runtime.feed_packet(
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7985,"msg":"Missing requirement"}}}'
+    )
+    state = Mock(cell="Enter", map_file_name="sevencircles.swf")
+    runtime.combat = Mock(state=state, running=True)
+    runtime._send = Mock()
+    runtime._leveling_target = 100
+    runtime._leveling_stop.clear()
+
+    old_sleep = time.sleep
+    monkeypatch.setattr(time, "sleep", lambda _s: old_sleep(0.01))
+    thread = threading.Thread(target=runtime._leveling_loop)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while not runtime._send.called and time.monotonic() < deadline:
+        old_sleep(0.02)
+    runtime._leveling_stop.set()
+    thread.join(timeout=1)
+
+    bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
+    assert "%xt%zm%acceptQuest%42%7968%" in bodies
+    assert "%xt%zm%tryQuestComplete%42%7968%-1%false%%wvz%" in bodies
 
 
 def test_farming_profile_defaults_enable_verified_mage_attack():

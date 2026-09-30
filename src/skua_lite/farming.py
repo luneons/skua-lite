@@ -19,6 +19,7 @@ from . import combat, sfs
 from .area_state import AreaStateStore
 from .bot import BotError
 from .inventory import ItemCatalog, OwnedItem
+from .quest_state import QuestState
 from .map_cells import MapCellScanner, SWFCellError
 
 
@@ -80,9 +81,14 @@ class FarmingRuntime:
         self._leveling_thread: threading.Thread | None = None
         self._leveling_quests: set[int] = set()
         self._leveling_spot: tuple[str, str] | None = None
+        self.leveling_dependency = None
+        self._leveling_probe_done = False
         # Full item picture (inventory + bank, every type), separate from the
         # class-only view combat keeps for its profile.
         self.item_catalog = ItemCatalog()
+        self.quest_state = QuestState()
+        from .scw import SCWStoryExecutor
+        self.scw_story = SCWStoryExecutor(self)
         self.area_state = AreaStateStore(
             self_username=str(getattr(bot, "username", "")),
             self_user_id=getattr(bot, "session_user_id", None),
@@ -135,6 +141,21 @@ class FarmingRuntime:
                 self.item_catalog.feed(packet)
             except Exception:
                 pass
+            try:
+                changed = self.quest_state.feed(packet)
+            except Exception:
+                changed = False
+            if changed:
+                parsed = sfs.parse_xt_json(packet)
+                if parsed is not None and parsed.get("cmd") == "acceptQuest":
+                    obj = parsed.get("obj") or {}
+                    if int(obj.get("bSuccess", 0) or 0) == 1:
+                        quest_id = int(obj.get("QuestID", 0) or 0)
+                        if quest_id > 0:
+                            self._send(
+                                sfs.get_quests_packet(self.bot.room_id, quest_id),
+                                f"muat quest {quest_id}",
+                            )
             self._scan_map_cells_if_changed()
 
     def _sync_class_profile(self) -> None:
@@ -620,8 +641,48 @@ class FarmingRuntime:
         return LevelSpot("icestormunder", "r2", "Top", quests=())
 
     def auto_level_spot(self) -> LevelSpot | None:
-        """Spot for the current level, or None once the cap is reached."""
+        """Best spot, or story repair when SCW is rejected.
+
+        The SCW gate is authoritative: an accepted 7985 means farm r9
+        immediately; a rejected 7985 suspends leveling to the first missing
+        Seven Circles step. Before either signal arrives, keep Skua brackets.
+        """
+        try:
+            from .scw import SCWDependencyPlanner, SCW_GATE_QUEST
+        except Exception:
+            return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
+        planner = SCWDependencyPlanner(self.quest_state)
+        quest_status = self.quest_state.status(SCW_GATE_QUEST)
+        if quest_status.accepted is True:
+            spot = planner.best_xp_spot()
+            if spot is not None:
+                return LevelSpot(spot.map_name, spot.cell, spot.pad,
+                                 target=spot.target, quests=spot.quests)
+        if quest_status.accepted is False:
+            step = planner.next_prerequisite()
+            if step is not None:
+                self.leveling_dependency = step
+                return LevelSpot(step.map_name, step.cell or "Enter",
+                                 step.pad, target=step.target,
+                                 quests=(step.quest_id,))
         return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
+
+    def _leveling_next_spot(self) -> LevelSpot | None:
+        """Resolve through the SCW gate; story repair wins while blocked."""
+        return self.auto_level_spot()
+
+    def _probe_scw_gate(self) -> None:
+        """Ask whether the optimal SCW quest gate is available, without moving."""
+        from .scw import SCW_GATE_QUEST
+
+        status = self.quest_state.status(SCW_GATE_QUEST)
+        if status.accepted is not None or self._leveling_probe_done:
+            return
+        self._leveling_probe_done = True
+        self._send(
+            sfs.accept_quest_packet(self.bot.room_id, SCW_GATE_QUEST),
+            f"probe quest gate {SCW_GATE_QUEST}",
+        )
 
     def start_leveling(self, target: int = 100) -> str:
         """Begin a background auto-level loop toward the target level."""
@@ -660,9 +721,11 @@ class FarmingRuntime:
                 self.stop_goal()
                 self._on_log(f"[LEVEL] auto leveling selesai di level {current}")
                 return
-            spot = self._level_bracket(current)
+            spot = self._leveling_next_spot()
             if spot is None:
                 return
+            self._probe_scw_gate()  # never moves; only learns the optimal gate
+            dependency = getattr(self, "leveling_dependency", None)
 
             # Navigate. A transient join failure must not kill the loop; the
             # bracket is re-evaluated next tick.
@@ -702,7 +765,9 @@ class FarmingRuntime:
 
             # Start fighting. A band's monster differs from the previous
             # band's, so retarget the engine before starting it.
-            if spot.target and spot.target != "*":
+            if dependency is not None and dependency.map_item_id > 0:
+                self.scw_story.execute_step(dependency)
+            elif spot.target and spot.target != "*":
                 self.combat.set_target(spot.target)
                 self.combat.set_map_wide(False)
                 self.combat.set_auto(False)
@@ -711,6 +776,8 @@ class FarmingRuntime:
             elif not self.combat.running:
                 self.fight_all_in_map()
 
+            if dependency is not None and dependency.map_item_id > 0:
+                self.scw_story.execute_step(dependency)
             # Quest turn-in is cheap and server-judged, so it repeats.
             for q in spot.quests:
                 self._send(sfs.try_quest_complete_packet(self.bot.room_id, q, -1),
