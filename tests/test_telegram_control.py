@@ -1,0 +1,331 @@
+"""Panel kontrol Telegram: parser, otorisasi, dan pengiriman balasan."""
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
+from skua_lite import telegram_control as tg
+
+
+class FakeTransport:
+    """Transport rekaman: tidak pernah menyentuh jaringan."""
+
+    def __init__(self, updates=None):
+        self.sent: list[tuple] = []
+        self.answered: list[tuple] = []
+        self.edits: list[tuple] = []
+        self.button_answers: list[tuple] = []
+        self.offsets: list[int | None] = []
+        self.get_me_calls = 0
+        self._updates = list(updates or [])
+        self.fail_with: Exception | None = None
+
+    def get_me(self):
+        self.get_me_calls += 1
+        return {"id": 7, "username": "skua_bot", "first_name": "Skua"}
+
+    def get_updates(self, offset=None, timeout=25):
+        self.offsets.append(offset)
+        if self.fail_with is not None:
+            raise self.fail_with
+        if self._updates:
+            return self._updates.pop(0)
+        raise tg.TelegramNetworkError("tidak ada update")
+
+    def send_message(self, chat_id, text, *, buttons=None):
+        self.sent.append((chat_id, text, buttons))
+        return {"message_id": len(self.sent)}
+
+    def answer_callback_query(self, callback_id, text=""):
+        self.answered.append((callback_id, text))
+        return True
+
+    def edit_message_text(self, chat_id, message_id, text, *, buttons=None):
+        self.edits.append((chat_id, message_id, text, buttons))
+        return True
+
+
+def _record_command(calls):
+    def run_command(orch, action, arg):
+        calls.append((action, arg))
+        print(f"[FAKE] {action} {arg}".strip())
+        return "farm"
+
+    return run_command
+
+
+def _control(transport, calls, *, owner_id=555, orch=None):
+    return tg.TelegramControl(
+        orch if orch is not None else SimpleNamespace(),
+        transport,
+        owner_id=owner_id,
+        run_command=_record_command(calls),
+    )
+
+
+def _message(text, *, user_id=555, chat_id=99):
+    return {
+        "message_id": 1,
+        "from": {"id": user_id, "first_name": "Boss"},
+        "chat": {"id": chat_id, "type": "private"},
+        "text": text,
+    }
+
+
+def _callback(data, *, user_id=555, chat_id=99, message_id=5):
+    return {
+        "id": "cb1",
+        "from": {"id": user_id, "first_name": "Boss"},
+        "message": {"message_id": message_id, "chat": {"id": chat_id}},
+        "data": data,
+    }
+
+
+# ---------------------------------------------------------------- config
+
+
+def test_config_reads_token_and_owner_from_env():
+    config = tg.TelegramConfig.from_env({
+        "SKUA_TELEGRAM_TOKEN": "123:abc",
+        "SKUA_TELEGRAM_OWNER_ID": "555",
+    })
+
+    assert config.token == "123:abc"
+    assert config.owner_id == 555
+    assert config.enabled is True
+
+
+def test_config_without_token_is_disabled():
+    config = tg.TelegramConfig.from_env({})
+
+    assert config.enabled is False
+    assert config.owner_id is None
+
+
+def test_config_rejects_non_numeric_owner_id():
+    config = tg.TelegramConfig.from_env({
+        "SKUA_TELEGRAM_TOKEN": "123:abc",
+        "SKUA_TELEGRAM_OWNER_ID": "bukan-angka",
+    })
+
+    assert config.owner_id is None
+
+
+# ---------------------------------------------------------------- parser
+
+
+def test_slash_command_maps_to_the_same_farm_command_set():
+    assert tg.parse_telegram_command("/join yulgar -private") == ("join", "yulgar -private")
+    assert tg.parse_telegram_command("/level 80") == ("level", "80")
+    assert tg.parse_telegram_command("/attack Bone Berserker") == ("attack", "Bone Berserker")
+    assert tg.parse_telegram_command("/dashboard") == ("dashboard", "")
+
+
+def test_slash_command_syntax_forms_normalize_identically():
+    assert tg.parse_telegram_command("/level@skua_bot 80") == ("level", "80")
+    assert tg.parse_telegram_command("level 80") == ("level", "80")
+    assert tg.parse_telegram_command(".level 80") == ("level", "80")
+
+
+def test_unknown_slash_command_is_refused_not_guessed():
+    assert tg.parse_telegram_command("/rm -rf /") == ("", "")
+    assert tg.parse_telegram_command("/keluar") == ("", "")
+
+
+def test_help_and_panel_are_handled_specially():
+    assert tg.parse_telegram_command("/start") == ("__help__", "")
+    assert tg.parse_telegram_command("/help") == ("__help__", "")
+    assert tg.parse_telegram_command("/panel") == ("__panel__", "")
+    assert tg.parse_telegram_command("/stop") == ("__stop__", "")
+
+
+# ---------------------------------------------------------------- authorization
+
+
+def test_non_owner_message_is_refused_without_running_any_command():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    control = _control(transport, calls)
+
+    control.handle_message(_message("/level 80", user_id=999))
+
+    assert calls == []
+    assert "bukan owner" in transport.sent[0][1].lower()
+
+
+def test_unknown_owner_id_reports_sender_id_and_runs_nothing():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    control = _control(transport, calls, owner_id=None)
+
+    control.handle_message(_message("/status", user_id=12345))
+
+    assert calls == []
+    assert "12345" in transport.sent[0][1]
+
+
+def test_owner_message_runs_command_and_replies_with_runtime_output():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    control = _control(transport, calls)
+
+    control.handle_message(_message("/join oaklore -private"))
+
+    assert calls == [("join", "oaklore -private")]
+    assert "(join, 'oaklore -private')" not in transport.sent[0][1]
+    assert "[FAKE] join oaklore -private" in transport.sent[0][1]
+
+
+def test_refused_command_reports_usage_instead_of_silence():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    control = _control(transport, calls)
+
+    control.handle_message(_message("/rm -rf /"))
+
+    assert calls == []
+    assert transport.sent, "harus ada balasan"
+    assert "/help" in transport.sent[0][1]
+
+
+# ---------------------------------------------------------------- panel + callbacks
+
+
+def test_dashboard_reply_carries_inline_buttons():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    control = _control(transport, calls)
+
+    control.handle_message(_message("/panel"))
+
+    chat_id, text, buttons = transport.sent[0]
+    assert chat_id == 99
+    labels = [button["text"] for row in buttons for button in row]
+    assert "Dashboard" in labels
+    assert any("-private" in button["callback_data"] for row in buttons for button in row)
+
+
+def test_callback_button_runs_its_command_and_answers_the_press():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    control = _control(transport, calls)
+
+    control.handle_callback(_callback("cmd|level|100 -private"))
+
+    assert calls == [("level", "100 -private")]
+    assert transport.answered and transport.answered[0][0] == "cb1"
+
+
+def test_callback_from_non_owner_is_refused_and_command_not_run():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    control = _control(transport, calls)
+
+    control.handle_callback(_callback("cmd|level|100", user_id=999))
+
+    assert calls == []
+    assert transport.answered, "callback harus tetap dijawab agar tombol tidak ngegantung"
+
+
+def test_stop_command_stops_leveling_attack_and_goal():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    control = _control(transport, calls)
+
+    control.handle_message(_message("/stop"))
+
+    assert ("level", "stop") in calls
+    assert ("attack", "off") in calls
+    assert ("auto", "stop") in calls
+
+
+# ---------------------------------------------------------------- polling
+
+
+def test_poll_once_advances_offset_past_handled_updates():
+    calls: list[tuple] = []
+    transport = FakeTransport([[{"update_id": 10, "message": _message("/status")}]])
+    control = _control(transport, calls)
+
+    offset = control.poll_once(None)
+
+    assert offset == 11
+    assert calls == [("status", "")]
+
+
+def test_poll_once_ignores_unrelated_update_shapes():
+    calls: list[tuple] = []
+    transport = FakeTransport([[{"update_id": 3, "edited_message": {"text": "/level 80"}}]])
+    control = _control(transport, calls)
+
+    assert control.poll_once(None) == 4
+    assert calls == []
+
+
+def test_serve_treats_three_consecutive_conflicts_as_fatal():
+    transport = FakeTransport()
+    transport.fail_with = tg.TelegramConflict("terminated by other getUpdates")
+    logs: list[str] = []
+    control = _control(transport, [])
+
+    control.serve(stop_event=_NeverSet(), on_log=logs.append, conflict_limit=3)
+
+    assert len(transport.offsets) == 3
+    assert any("409" in line or "konflik" in line.lower() for line in logs)
+
+
+def test_serve_recovers_from_network_errors():
+    transport = FakeTransport([[{"update_id": 1, "message": _message("/status")}]])
+    calls: list[tuple] = []
+    control = _control(transport, calls)
+    logs: list[str] = []
+
+    control.serve(stop_event=_StopAfter(2), on_log=logs.append)
+
+    assert calls == [("status", "")]
+    assert any("gagal" in line.lower() or "error" in line.lower() for line in logs)
+
+
+# ---------------------------------------------------------------- transport hygiene
+
+
+def test_reply_is_truncated_to_telegram_message_limit():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    control = _control(transport, calls, orch=SimpleNamespace())
+
+    def run_command(orch, action, arg):
+        print("x" * 9000)
+        return "farm"
+
+    control.run_command = run_command
+    control.handle_message(_message("/status"))
+
+    body = transport.sent[0][1]
+    assert len(body) <= tg.MAX_MESSAGE_CHARS
+    assert body.endswith(tg.TRUNCATION_MARKER)
+
+
+class _NeverSet:
+    def is_set(self) -> bool:
+        return False
+
+    def wait(self, timeout: float) -> bool:
+        return False
+
+
+class _StopAfter:
+    """Stop event yang menutup setelah N panggilan wait()."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.calls = 0
+
+    def is_set(self) -> bool:
+        return self.calls >= self.limit
+
+    def wait(self, timeout: float) -> bool:
+        self.calls += 1
+        return self.is_set()

@@ -18,6 +18,12 @@ from .agent_tools import AgentTools
 from .ai_router import AIChatRouter, AIConfig, openai_chat_generator
 from .research import Researcher, ResearchCache
 from .wiki_knowledge import WikiKnowledge, default_wiki_db_path
+from .telegram_control import (
+    TelegramConfig,
+    TelegramControl,
+    TelegramControlService,
+    TelegramTransport,
+)
 
 
 class ReloginWatcher(threading.Thread):
@@ -98,6 +104,7 @@ class Orchestrator:
         self.bot: bot_mod.AQWBot | None = None
         self.watcher: ReloginWatcher | None = None
         self.farming: farming.FarmingRuntime | None = None
+        self.telegram: TelegramControlService | None = None
         self.auto_relogin = True
         self.packet_log_enabled = False  # default: packet spam MATI
         self.last_inbound_packet = ""
@@ -274,6 +281,31 @@ class Orchestrator:
         self.connect(u, p)
         self._restore_state(snap)
 
+    def start_telegram_control(self, config: TelegramConfig | None = None) -> bool:
+        """Start one owner-only Telegram long-poll controller when configured."""
+        if self.mode is not RunMode.FARMING or self.farming is None or self.bot is None:
+            return False
+        cfg = config or TelegramConfig.from_env()
+        if not cfg.enabled:
+            return False
+        if self.telegram is not None:
+            self.telegram.stop()
+        control = TelegramControl(
+            self,
+            TelegramTransport(cfg.token),
+            owner_id=cfg.owner_id,
+            run_command=cli.dispatch_farm,
+        )
+        service = TelegramControlService(control, on_log=self.log)
+        service.start()
+        self.telegram = service
+        if cfg.owner_id is None:
+            self.log(
+                "[TELEGRAM] owner belum dikunci; kirim /start untuk melihat "
+                "numeric ID, lalu isi SKUA_TELEGRAM_OWNER_ID."
+            )
+        return True
+
     def _on_packet(self, pkt: str, outbound: bool) -> None:
         # Keep the most recent server packet for one-shot diagnostics and append
         # system presence events to an evidence file. Only structural SFS/game
@@ -356,6 +388,8 @@ class Orchestrator:
         return path
 
     def shutdown(self) -> None:
+        if self.telegram:
+            self.telegram.stop()
         if self.watcher:
             self.watcher.stop()
         if self.farming:
@@ -412,7 +446,13 @@ def run(server_name: str = config.DEFAULT_SERVER, target_map: str | None = None,
         return 2
 
     try:
-        cli.farm_menu_loop(orch) if orch.farming is not None else cli.menu_loop(orch.bot)
+        if orch.farming is not None:
+            started = orch.start_telegram_control()
+            if not started:
+                print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
+            cli.farm_menu_loop(orch)
+        else:
+            cli.menu_loop(orch.bot)
     finally:
         orch.shutdown()
     return 0
