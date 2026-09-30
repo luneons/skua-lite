@@ -276,6 +276,80 @@ def test_stop_command_stops_leveling_attack_and_goal():
     assert ("auto", "stop") in calls
 
 
+def test_gantiakun_shows_account_picker_when_accounts_exist():
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    accounts = SimpleNamespace(
+        list_usernames=lambda: ["Hero123", "AltAccount"],
+        active_username=lambda: "Hero123",
+    )
+    orch = SimpleNamespace(
+        server_name="Yorumi",
+        bot=None,
+        accounts=accounts,
+        store=None,
+    )
+    control = _control(transport, calls, orch=orch)
+
+    control.handle_message(_message("/gantiakun"))
+
+    text = transport.sent[0][1]
+    buttons = transport.sent[0][2]
+    assert "PILIH AKUN" in text
+    assert "Hero123" in text
+    flat = [b["text"] for row in buttons for b in row]
+    assert any("Hero123" in t for t in flat)
+    assert any("AltAccount" in t for t in flat)
+
+
+def test_gantiakun_shows_empty_hint_when_no_accounts():
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    accounts = SimpleNamespace(
+        list_usernames=lambda: [],
+        active_username=lambda: None,
+    )
+    orch = SimpleNamespace(server_name="Yorumi", bot=None, accounts=accounts, store=None)
+    control = _control(transport, calls, orch=orch)
+
+    control.handle_message(_message("/gantiakun"))
+
+    text = transport.sent[0][1]
+    assert ".tambahakun" in text
+
+
+def test_callback_acc_calls_switch_account_by_name():
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    switched: list[str] = []
+    orch = SimpleNamespace(
+        switch_account_by_name=lambda u: switched.append(u) or f"OK pindah ke {u}",
+    )
+    control = _control(transport, calls, orch=orch)
+
+    control.handle_callback(_callback("special|acc|AltAccount"))
+
+    assert switched == ["AltAccount"]
+    assert "AltAccount" in transport.edits[0][2]
+
+
+def test_tambahakun_cli_adds_to_multi_account_store():
+    from skua_lite.cli import parse_farm_command, dispatch_farm
+
+    saved: dict[str, str] = {}
+
+    class FakeAccounts:
+        def add_account(self, u, p):
+            saved[u] = p
+
+    orch = SimpleNamespace(farming=object(), bot=None, accounts=FakeAccounts())
+
+    action, arg = parse_farm_command(".tambahakun newuser newpass")
+    assert action == "tambahakun"
+
+    dispatch_farm(orch, action, arg)
+    assert saved == {"newuser": "newpass"}
+
 def test_settings_and_change_server_commands():
     calls: list[tuple] = []
     transport = FakeTransport()
@@ -283,6 +357,7 @@ def test_settings_and_change_server_commands():
         server_name="Yorumi",
         bot=SimpleNamespace(username="Hero123", current_map="oaklore-1", state="IN_MAP"),
         store=SimpleNamespace(load=lambda: ("Hero123", "pw")),
+        accounts=SimpleNamespace(list_usernames=lambda: [], active_username=lambda: None),
         switch_server=lambda s: f"OK: switch ke {s}",
     )
     control = _control(transport, calls, orch=orch)
@@ -297,9 +372,9 @@ def test_settings_and_change_server_commands():
     control.handle_message(_message("/gantiserver Artix"))
     assert "switch ke Artix" in transport.sent[1][1]
 
-    # 3. /gantiakun
+    # 3. /gantiakun (tidak ada akun tersimpan -> tampilkan panduan)
     control.handle_message(_message("/gantiakun"))
-    assert "GANTI AKUN" in transport.sent[2][1]
+    assert ".tambahakun" in transport.sent[2][1]
 
     # 4. Callback settings
     control.handle_callback(_callback("special|settings|"))

@@ -10,6 +10,7 @@ from typing import Any
 
 from . import bot as bot_mod
 from . import cli, config, credentials, farming, login, servers
+from .credentials import CredentialStore, MultiAccountStore, NoStoredCredentials
 from .auto_planner import AutoGoal
 from .mode import RunMode, select_mode
 from .reconnect import ReconnectPolicy
@@ -101,6 +102,7 @@ class Orchestrator:
             )
         self.target_map = target_map
         self.store = store or credentials.CredentialStore()
+        self._accounts: MultiAccountStore | None = None
         self.bot: bot_mod.AQWBot | None = None
         self.watcher: ReloginWatcher | None = None
         self.farming: farming.FarmingRuntime | None = None
@@ -120,6 +122,13 @@ class Orchestrator:
 
     def log(self, msg: str) -> None:
         print(msg, flush=True)
+
+    @property
+    def accounts(self) -> MultiAccountStore:
+        """Lazy-init MultiAccountStore; konstruksi di-defer agar test yang pakai Mock store tidak pecah."""
+        if self._accounts is None:
+            self._accounts = MultiAccountStore(base_dir=self.store.base_dir)
+        return self._accounts
 
     # ------------------------------------------------------------------
     def obtain_credentials(self) -> tuple[str, str]:
@@ -302,13 +311,14 @@ class Orchestrator:
             return f"Gagal koneksi ke server {server.name}: {e}"
 
     def switch_account(self, username: str, password: str) -> str:
-        """Ganti akun yang digunakan, simpan terenkripsi, lalu koneksi."""
+        """Ganti akun, simpan terenkripsi ke kedua store, lalu koneksi."""
         u = str(username or "").strip()
         p = str(password or "").strip()
         if not u or not p:
-            return "Username dan password wajib diisi. Contoh: /gantiakun user pass"
+            return "Username dan password wajib diisi."
 
         self.store.save(u, p)
+        self.accounts.add_account(u, p)
         if self.bot:
             try:
                 self.bot.stop()
@@ -320,6 +330,29 @@ class Orchestrator:
             return f"Berhasil login sebagai '{u}'."
         except Exception as e:
             return f"Gagal login akun baru: {e}"
+
+    def switch_account_by_name(self, username: str) -> str:
+        """Ganti ke akun tersimpan lain tanpa memasukkan ulang password."""
+        u = str(username or "").strip()
+        if not u:
+            return "Nama akun tidak boleh kosong."
+        try:
+            _, password = self.accounts.load(u)
+        except NoStoredCredentials:
+            # Cek apakah itu akun di legacy store
+            if self.store.exists():
+                try:
+                    leg_u, leg_p = self.store.load()
+                    if leg_u.casefold() == u.casefold():
+                        return self.switch_account(leg_u, leg_p)
+                except Exception:
+                    pass
+            return f"Akun '{u}' tidak ditemukan di daftar tersimpan."
+        except Exception as e:
+            return f"Gagal membaca akun '{u}': {e}"
+
+        self.accounts.set_active(u)
+        return self.switch_account(u, password)
 
     def start_telegram_control(self, config: TelegramConfig | None = None) -> bool:
         """Start one owner-only Telegram long-poll controller when configured."""

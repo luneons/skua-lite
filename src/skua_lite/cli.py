@@ -265,6 +265,7 @@ def print_farm_help() -> None:
     print("INFO")
     print("  .status / .area / .dapat <item> / .wiki <item|lokasi|quest>")
     print("  .saranfarm <monster>        -> cari map monster dari wiki")
+    print("  .tambahakun <user> <pass>   -> simpan akun terenkripsi untuk Telegram")
     print("Tanpa -private = room publik; -private = room 100000.")
 
 
@@ -354,7 +355,7 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
         "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
         "weapon", "armor", "helm", "cape", "level", "leveling", "dapat", "wiki",
-        "saranfarm", "help", "dashboard", "ui",
+        "saranfarm", "tambahakun", "help", "dashboard", "ui",
     }
     if action not in known:
         return "", ""
@@ -578,6 +579,17 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
                 print("[WIKI] tidak ada lokasi monster itu di database lokal.")
             else:
                 print(f"[WIKI] {suggestion}")
+        elif action == "tambahakun":
+            parts = arg.split(maxsplit=1)
+            if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
+                raise ValueError("format: .tambahakun <username> <password>")
+            username, password = parts[0].strip(), parts[1].strip()
+            accounts = getattr(orch, "accounts", None)
+            if accounts is None:
+                print("[AKUN] penyimpanan multi-akun tidak tersedia.")
+                return None
+            accounts.add_account(username, password)
+            print(f"[AKUN] '{username}' tersimpan terenkripsi. /gantiakun di Telegram siap.")
         elif action == "item":
             parts = arg.split(maxsplit=1)
             sub = parts[0].lower() if parts else "scan"

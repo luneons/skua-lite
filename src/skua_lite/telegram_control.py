@@ -408,24 +408,45 @@ class TelegramControl:
         return _bounded("\n".join(lines)), buttons
 
     def _handle_change_account(self, arg: str) -> tuple[str, list[list[dict[str, str]]] | None]:
-        clean = str(arg or "").strip()
-        if clean:
+        orch = self.orch
+        accounts_store = getattr(orch, "accounts", None)
+        usernames: list[str] = []
+        active: str | None = None
+        if accounts_store is not None:
+            try:
+                usernames = accounts_store.list_usernames()
+                active = accounts_store.active_username()
+            except Exception:
+                pass
+
+        if not usernames:
             return (
-                "Demi keamanan password, penggantian akun tidak diperkenankan memasukkan password via chat Telegram.\n\n"
-                "Untuk mengganti akun yang tersimpan:\n"
-                "Jalankan skua-lite di terminal/CLI untuk login akun baru, dan pilih [Y] untuk menyimpan kredensial ke disk lokal yang terenkripsi.",
+                "=== GANTI AKUN AQW ===\n"
+                "Belum ada akun yang tersimpan di daftar.\n\n"
+                "Cara menambah akun:\n"
+                "Di terminal (saat bot berjalan), ketik:\n"
+                "  .tambahakun <username> <password>\n\n"
+                "Setelah itu, /gantiakun akan menampilkan pilihan akun.",
                 panel_buttons(),
             )
-        return (
-            "=== GANTI AKUN AQW ===\n"
-            "Kredensial tersimpan secara aman di mesin lokal menggunakan enkripsi DPAPI/Fernet.\n\n"
-            "Untuk ganti akun:\n"
-            "1. Hentikan bot di terminal\n"
-            "2. Jalankan `python -m skua_lite --mode farming`\n"
-            "3. Masukkan username dan password baru di terminal\n"
-            "4. Kredensial baru akan otomatis terenkripsi dan dipakai oleh Telegram.",
-            panel_buttons(),
-        )
+
+        lines = ["=== PILIH AKUN AQW ==="]
+        buttons: list[list[dict[str, str]]] = []
+        row: list[dict[str, str]] = []
+        for u in usernames:
+            label = f"{'✓ ' if u == active else ''}{u}"
+            row.append({"text": label, "callback_data": f"special|acc|{u}"})
+            if len(row) >= 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        buttons.append([{"text": "« Kembali ke Panel", "callback_data": "special|panel|"}])
+
+        cur = f"\nAkun aktif: {active}" if active else ""
+        lines.append(cur)
+        lines.append("Pilih akun di bawah untuk langsung ganti dan reconnect.")
+        return _bounded("\n".join(lines)), buttons
 
     def handle_message(self, message: Mapping[str, Any]) -> None:
         sender = message.get("from") or {}
@@ -517,6 +538,14 @@ class TelegramControl:
         elif kind == "special" and action == "srv":
             # Tombol server langsung dari daftar server
             text, new_buttons = self._handle_change_server(arg)
+        elif kind == "special" and action == "acc":
+            # Tombol akun: ganti ke akun tersimpan tanpa mengetik password
+            orch = self.orch
+            if hasattr(orch, "switch_account_by_name"):
+                text = _bounded(orch.switch_account_by_name(arg))
+            else:
+                text = f"Gagal ganti akun: method switch_account_by_name tidak tersedia."
+            new_buttons = panel_buttons()
         elif kind == "cmd" and action in set(_ALIASES.values()):
             text = self._execute(action, arg)
             new_buttons = panel_buttons()
