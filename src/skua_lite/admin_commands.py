@@ -3,6 +3,8 @@
 Admin commands are the only chat inputs that may trigger side effects:
 
 * ``!cari <query>``      — open-web research through the local agent CLI.
+* ``!dapat <item>``      — item source from the local AQW Wiki SQLite mirror.
+* ``!item <nama>`` / ``!quest <id/nama>`` / ``!shop <nama>`` — same local lookup.
 * ``!upgrade <tujuan>``  — bounded self-upgrade (agent edits, pytest verifies).
 * ``!exec <kode>``       — short Python snippet inside the project.
 * ``!run <perintah>``    — allowlisted read-only shell (opt-in only).
@@ -23,11 +25,15 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .agent_tools import AgentTools, ToolResult
+from .wiki_knowledge import WikiKnowledge
 
 # `!cari info dragon fable` -> ("cari", "info dragon fable")
 _ADMIN_RE = re.compile(r"^\s*!\s*([A-Za-z]+)\s*(.*)$")
 
-_COMMANDS = ("cari", "upgrade", "exec", "run", "join", "move", "status", "bantuan", "help", "admin")
+_COMMANDS = (
+    "cari", "dapat", "item", "quest", "shop", "upgrade", "exec", "run",
+    "join", "move", "status", "bantuan", "help", "admin",
+)
 
 
 def parse_admin_command(message: str) -> tuple[str, str] | None:
@@ -67,9 +73,11 @@ class AdminCommandHandler:
     actions: AdminActions = field(default_factory=AdminActions)
     on_log: Callable[[str], None] = lambda _message: None
     pending_upgrade: str | None = None
+    wiki: WikiKnowledge | None = None
 
     HELP_TEXT = (
-        "admin: !cari <q> !upgrade <tujuan> !join <map> !move <x> <y> "
+        "admin: !cari <q> !dapat <item> !quest <id/nama> !shop <nama> "
+        "!upgrade <tujuan> !join <map> !move <x> <y> "
         "!exec <kode> !run <cmd> !status !admin off"
     )
 
@@ -82,6 +90,8 @@ class AdminCommandHandler:
 
         if verb == "cari":
             return AdminOutcome(True, self._blocking(self.tools.web_search, arg, arg))
+        if verb in ("dapat", "item", "quest", "shop"):
+            return AdminOutcome(True, self._wiki_lookup(arg))
         if verb == "upgrade":
             return AdminOutcome(True, self._upgrade(arg))
         if verb == "exec":
@@ -101,6 +111,20 @@ class AdminCommandHandler:
         return AdminOutcome(True, self.HELP_TEXT)
 
     # -- long-running tools ------------------------------------------------
+    def _wiki_lookup(self, query: str) -> str:
+        """Answer from the local Wiki DB (<10ms); never touches the network."""
+        text = (query or "").strip()
+        if not text:
+            return "Format: !dapat <nama item>, misal !dapat Burning Blade"
+        try:
+            hit = self.wiki.lookup_item(text) if self.wiki is not None else None
+        except Exception as exc:  # noqa: BLE001 - a tool must never crash chat
+            self.on_log(f"[ADMIN] wiki error: {exc}")
+            return "Database wiki belum siap."
+        if hit is None:
+            return "Item tidak ketemu di wiki lokal. Coba !cari <nama item>."
+        return self._clamp(hit.short_answer(150))
+
     def _blocking(self, call, display: str, arg: str) -> str:
         """Run a tool synchronously and convert the evidence into a reply."""
         try:

@@ -178,6 +178,8 @@ def print_farm_banner(orch: Any) -> None:
     print("   .goal stop                -> hentikan tujuan map")
     print("   (tanpa titik juga bisa: 'lawan semua musuh di map ini')")
     print("   .capture on|off           -> rekam paket combat ke combat_capture.log")
+    print("   .dapat <item>             -> sumber item dari wiki lokal (offline)")
+    print("   .wiki <item>              -> sama seperti .dapat")
     print("   .chat <pesan|/command>    -> chat biasa atau cmd game (/join, /goto)")
     print("-" * 56)
     print(" Umum: chat <pesan> | status | quit")
@@ -248,7 +250,7 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         "status", "st", "join", "move", "drop", "rest", "booster", "aggro",
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
         "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
-        "weapon", "armor", "helm", "cape", "level",
+        "weapon", "armor", "helm", "cape", "level", "dapat", "wiki",
     }
     if action not in known:
         return "", ""
@@ -275,6 +277,17 @@ def _print_menu(title: str, rows: list[str], prompt: str) -> None:
         print(r)
     if prompt:
         print(f"[{title.upper()}] pilih: {prompt}")
+
+def _farm_wiki(orch: Any):
+    """Reuse one read-only Wiki handle for the lifetime of the farm session."""
+    wiki = getattr(orch, "_wiki_knowledge", None)
+    if wiki is None:
+        from .wiki_knowledge import WikiKnowledge, default_wiki_db_path
+
+        wiki = WikiKnowledge(default_wiki_db_path())
+        setattr(orch, "_wiki_knowledge", wiki)
+    return wiki
+
 
 def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
     """Jalankan satu perintah farming; error dilaporkan, tidak mematikan bot."""
@@ -427,6 +440,14 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
             else:
                 print("[WARN] tujuan auto tidak dikenal. Contoh: auto cari Bone x5 dari Skeleton")
                 return None
+        elif action in {"dapat", "wiki"}:
+            if not arg.strip():
+                raise ValueError("format: .dapat <nama item>")
+            hit = _farm_wiki(orch).lookup_item(arg.strip())
+            if hit is None:
+                print("[WIKI] item tidak ketemu di database lokal.")
+            else:
+                print(f"[WIKI] {hit.answer}")
         elif action == "item":
             parts = arg.split(maxsplit=1)
             sub = parts[0].lower() if parts else "scan"

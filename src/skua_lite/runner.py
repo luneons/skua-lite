@@ -17,6 +17,7 @@ from .admin_commands import AdminActions, AdminCommandHandler
 from .agent_tools import AgentTools
 from .ai_router import AIChatRouter, AIConfig, openai_chat_generator
 from .research import Researcher, ResearchCache
+from .wiki_knowledge import WikiKnowledge, default_wiki_db_path
 
 
 class ReloginWatcher(threading.Thread):
@@ -180,7 +181,8 @@ class Orchestrator:
                     describe_status=lambda: f"state {_admin_status(b)}",
                 )
                 admin_handler = AdminCommandHandler(
-                    tools=tools, actions=actions, on_log=self.log
+                    tools=tools, actions=actions, on_log=self.log,
+                    wiki=WikiKnowledge(default_wiki_db_path()),
                 )
                 ai_router = AIChatRouter(
                     generator=openai_chat_generator(ai_config),
@@ -189,6 +191,7 @@ class Orchestrator:
                     memory_path=os.path.join(local_data, "ai_memory.json"),
                     researcher=researcher,
                     admin_handler=admin_handler,
+                    wiki=admin_handler.wiki,
                 )
                 self.log("[AI] router siap + Admin mode (owner `!` commands).")
             else:

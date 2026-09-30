@@ -15,6 +15,7 @@ import urllib.request
 
 from .ultra_guide import UltraGuide
 from .aqw_knowledge import AQWKnowledge
+from .wiki_knowledge import WikiKnowledge, default_wiki_db_path
 from .research import Researcher, parse_research_marker
 from .admin_commands import AdminCommandHandler, AdminInbox, parse_admin_command
 
@@ -320,6 +321,8 @@ class AIChatRouter:
         researcher: Researcher | None = None,
         admin_handler: AdminCommandHandler | None = None,
         admin_inbox: AdminInbox | None = None,
+        wiki: WikiKnowledge | None = None,
+        wiki_db_path: str | os.PathLike[str] | None = None,
     ) -> None:
         self._generator = generator
         self._send_chat = send_chat
@@ -363,6 +366,16 @@ class AIChatRouter:
         self._guide_fingerprint_cache = self._guide_fingerprint()
         # Offline AQW fundamentals (class abbreviations + enhancements).
         self._knowledge = AQWKnowledge.discover(self._guide_dir)
+        # Optional local item-source lookup (fast SQLite mirror, read-only).
+        if wiki is not None:
+            self._wiki = wiki
+        elif wiki_db_path is not None:
+            self._wiki: WikiKnowledge | None = WikiKnowledge(wiki_db_path)
+        else:
+            try:
+                self._wiki = WikiKnowledge(default_wiki_db_path())
+            except Exception:  # noqa: BLE001 - wiki is optional
+                self._wiki = None
         # Optional single-turn researcher that follows the RESEARCH: marker.
         self._researcher = researcher
         self._research_seen_keys: set[str] = set()
@@ -706,6 +719,7 @@ class AIChatRouter:
 
         room_context = self.room_log_summary() if owner else ""
         ultra_context = self.guide.context_for(text)
+        wiki_context = self._wiki.context_for(text) if self._wiki is not None else ""
         memory_block = self._memory_block(sender, sender_id)
         if owner:
             prompt = (
@@ -723,6 +737,10 @@ class AIChatRouter:
         if ultra_context:
             # Guide knowledge is available to anyone who asks about it.
             prompt = f"{prompt}\n\n{ultra_context}"
+        if wiki_context:
+            # A local Wiki hit answers the source question, so the model
+            # must not spend a RESEARCH: round on this question.
+            prompt = f"{prompt}\n\n{wiki_context}\nJawab langsung dari konteks itu."
         # Expand abbreviations/enhancements present either in the question or
         # in the guide slice, so the model can decode terse comps like SC/LR.
         aqw_context = self._knowledge.context_for(text, ultra_context)
