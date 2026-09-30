@@ -973,14 +973,15 @@ class FarmingRuntime:
         )
 
     def attack(self, monster_name: str = "") -> None:
-        target = monster_name.strip() or self.profile.target_monster
+        target = monster_name.strip()
+        if not target:
+            target = self.combat.target_name or self.profile.target_monster
         if target.casefold() == "auto":
             self.attack_auto()
             return
+        # Retarget jika diminta target baru yang valid
         if target.casefold() != self.combat.target_name.casefold():
-            raise ValueError(
-                f"target sesi ini: {self.combat.target_name}; diminta {target}"
-            )
+            self.combat.set_target(target)
         # A named target is the narrower goal: leave map-wide mode so the
         # engine stops navigating on its own.
         self.combat.set_map_wide(False)

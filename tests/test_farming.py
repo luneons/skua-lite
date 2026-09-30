@@ -720,8 +720,11 @@ def test_farming_runtime_attack_controls_combat_engine():
     assert runtime.combat.map_wide is False
     runtime.combat.target_name = "Water Draconian"
 
-    with pytest.raises(ValueError):
-        runtime.attack("Frogzard")
+    # Retargeting ke monster baru sekarang diizinkan dan mengubah target combat
+    runtime.combat.set_target = lambda name: setattr(runtime.combat, "target_name", name)
+    runtime.attack("Frogzard")
+    assert runtime.combat.target_name == "Frogzard"
+    assert runtime.combat.running is True
 
 
 def test_farming_runtime_feeds_combat_and_captures_on_request(tmp_path):
