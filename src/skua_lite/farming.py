@@ -726,25 +726,31 @@ class FarmingRuntime:
         return LevelSpot("icestormunder", "r2", "Top", quests=())
 
     def auto_level_spot(self) -> LevelSpot | None:
-        """Best spot, or story repair when SCW is rejected.
+        """Best spot, or story repair when SCW prerequisites are incomplete.
 
-        The SCW gate is authoritative: an accepted 7977 means the farming chain
-        is unlocked, so farm sevencircleswar Enter/Right immediately; a rejected 7977
-        suspends leveling to the first missing Seven Circles step. Before either
-        signal arrives, keep Skua brackets.
+        Unlock check delegates to SCWDependencyPlanner.unlocked():
+          - Farming terbuka HANYA jika 7977 sudah ccqr-sukses, atau server
+            sudah menerima salah satu quest farming (7979/7980/7981).
+          - accept(7977) saja TIDAK cukup; server bisa terima quest story
+            walau chain belum selesai di akun baru.
+        Next prerequisite = step pertama yang belum completed (ccqr sukses).
+        Bracket Skua dipakai sementara planner belum tahu status story.
         """
         try:
-            from .scw import SCWDependencyPlanner, SCW_GATE_QUEST
+            from .scw import SCWDependencyPlanner
         except Exception:
             return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
         planner = SCWDependencyPlanner(self.quest_state)
-        quest_status = self.quest_state.status(SCW_GATE_QUEST)
-        if quest_status.accepted is True:
+        if planner.unlocked():
             spot = planner.best_xp_spot()
             if spot is not None:
                 return LevelSpot(spot.map_name, spot.cell, spot.pad,
                                  target=spot.target, quests=spot.quests)
-        if quest_status.accepted is False:
+
+        # Probe quest farming adalah sumber kebenaran. Status unknown berarti
+        # belum ada verdict server; tetap pakai bracket biasa sampai jawaban.
+        probe_status = self.quest_state.status(7981)
+        if probe_status.accepted is False:
             step = planner.next_prerequisite()
             if step is not None:
                 self.leveling_dependency = step
@@ -758,21 +764,20 @@ class FarmingRuntime:
         return self.auto_level_spot()
 
     def _probe_scw_gate(self) -> None:
-        """Ask whether the SCW gate quest (7977 Ava-risky Business) is available.
+        """Probe quest farming 7981, bukan quest story 7977.
 
-        Sending acceptQuest(7977) without moving reveals whether the prerequisite
-        chain is complete.  The response feeds back into quest_state and the next
-        auto_level_spot() call picks the correct spot.
+        acceptQuest(7977) bisa sukses pada akun baru dan tidak membuktikan chain
+        selesai. Quest farming 7981 adalah probe yang benar: diterima berarti
+        farming terbuka; ditolak berarti jalankan prerequisite 7968→7977.
         """
-        from .scw import SCW_GATE_QUEST
-
-        status = self.quest_state.status(SCW_GATE_QUEST)
+        probe_quest = 7981
+        status = self.quest_state.status(probe_quest)
         if status.accepted is not None or self._leveling_probe_done:
             return
         self._leveling_probe_done = True
         self._send(
-            sfs.accept_quest_packet(self.bot.room_id, SCW_GATE_QUEST),
-            f"probe quest gate {SCW_GATE_QUEST}",
+            sfs.accept_quest_packet(self.bot.room_id, probe_quest),
+            f"probe quest farming {probe_quest}",
         )
 
     def start_leveling(self, target: int = 100, *, private: bool = False) -> str:

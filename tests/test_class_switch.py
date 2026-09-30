@@ -156,7 +156,7 @@ def test_engine_swaps_profile_when_class_changes_and_then_attacks():
     ]}))
 
     assert engine.tick() is True
-    assert sent == ["%xt%zm%gar%1%0%a2>m:2,a2>m:1%wvz%"]
+    assert sent == ["%xt%zm%gar%42%0%a2>m:2,a2>m:1%wvz%"]
 
 
 def test_engine_class_swap_resets_stale_cooldowns():
@@ -313,7 +313,7 @@ def test_runtime_attacks_with_live_skills_of_a_non_mage_class():
     ]}))
 
     assert runtime.combat.tick() is True
-    assert sent[-1] == "%xt%zm%gar%1%0%a3>m:2,a3>m:1%wvz%"
+    assert sent[-1] == "%xt%zm%gar%42%0%a3>m:2,a3>m:1%wvz%"
 
 
 # ---------------------------------------------------------------------------

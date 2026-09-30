@@ -168,8 +168,10 @@ def test_farming_runtime_feeds_quest_state_from_server():
 
 
 def test_live_scw_accept_packet_marks_gate_available_and_requests_data():
-    """A captured Yorumi success response makes the gate authoritative."""
-    bot = Mock(username="alice", session_user_id=1, room_id=42, move_on_join=None)
+    """accept(7977) berhasil → state tercatat, tapi farming belum terbuka.
+    Farming baru terbuka setelah ccqr(7977) atau accept(7979/7980/7981) sukses.
+    """
+    bot = Mock(username="alice", session_user_id=1, room_id=42, move_on_join=None, level=8)
     runtime = farming.FarmingRuntime(bot=bot)
     runtime._send = Mock()
     packet = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
@@ -179,7 +181,9 @@ def test_live_scw_accept_packet_marks_gate_available_and_requests_data():
     assert runtime.quest_state.accepted(7977)
     sent = runtime._send.call_args.args[0].rstrip(b"\x00").decode("latin-1")
     assert sent == "%xt%zm%getQuests%42%7977%"
-    assert runtime.auto_level_spot().map_name == "sevencircleswar"
+    # accept(7977) saja TIDAK cukup unlock farming — ini adalah bug lama yang diperbaiki
+    spot = runtime.auto_level_spot()
+    assert spot is None or spot.map_name != "sevencircleswar"
 
 
 def test_scw_dependency_planner_uses_best_spot_only_after_gate():
@@ -190,8 +194,14 @@ def test_scw_dependency_planner_uses_best_spot_only_after_gate():
     assert planner.best_xp_spot() is None
     assert planner.next_prerequisite().quest_id == 7968
 
-    accepted = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
-    quests.feed(accepted)
+    # accept(7977) saja tidak cukup → spot masih None
+    accepted_only = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
+    quests.feed(accepted_only)
+    assert planner.best_xp_spot() is None
+
+    # ccqr(7977) sukses → farming terbuka
+    completed = '{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
+    quests.feed(completed)
     spot = planner.best_xp_spot()
     assert (spot.map_name, spot.cell, spot.quests) == (
         "sevencircleswar", "Enter", (7979, 7980, 7981)
@@ -229,15 +239,18 @@ def test_leveling_loop_probes_scw_gate_before_combat(monkeypatch):
     thread.join(timeout=1)
 
     bodies = [c.args[0].rstrip(b"\x00").decode("latin-1") for c in runtime._send.call_args_list]
-    assert "%xt%zm%acceptQuest%42%7977%" in bodies
+    # Probe adalah quest farming 7981, bukan quest story 7977
+    assert "%xt%zm%acceptQuest%42%7981%" in bodies
     assert "%xt%zm%acceptQuest%42%4007%" in bodies
-    assert all("%7980%" not in body and "%7981%" not in body for body in bodies)
+    assert all("%7977%" not in body and "%7980%" not in body for body in bodies)
 
 
 def test_scw_rejected_probe_suspends_level_goal_for_story_prerequisite():
+    """Probe quest farming 7981 ditolak → bot harus jalankan story mulai 7968."""
     bot = Mock(level=8)
     runtime = farming.FarmingRuntime(bot=bot)
-    rejected = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7977,"msg":"Missing requirement"}}}'
+    # Quest farming 7981 ditolak = story belum selesai
+    rejected = '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7981,"msg":"Missing requirement"}}}'
     runtime.feed_packet(rejected)
 
     assert runtime.auto_level_spot().map_name == "sevencircles"
@@ -301,8 +314,9 @@ def test_leveling_probe_promotes_to_scw_farm_after_gate_accepted(monkeypatch):
     state = Mock(cell="r9", map_file_name="sevencircleswar.swf")
     runtime.combat = Mock(state=state, running=True)
     runtime._send = Mock()
+    # ccqr(7977) sukses → farming terbuka → loop kirim acceptQuest farming
     runtime.feed_packet(
-        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":1,"QuestID":7977,"msg":"success"}}}'
     )
     runtime._send.reset_mock()
     runtime._leveling_target = 100
@@ -326,8 +340,9 @@ def test_leveling_probe_promotes_to_scw_farm_after_gate_accepted(monkeypatch):
 def test_scw_story_step_completes_before_returning_to_farm():
     bot = Mock(level=8, room_id=42)
     runtime = farming.FarmingRuntime(bot=bot)
+    # Probe farming 7981 ditolak → story repair
     runtime.feed_packet(
-        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7977,"msg":"Missing requirement"}}}'
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7981,"msg":"Missing requirement"}}}'
     )
     runtime.feed_packet(
         '{"t":"xt","b":{"r":-1,"o":{"cmd":"ccqr","bSuccess":1,"QuestID":7968,"msg":"success"}}}'
@@ -340,8 +355,9 @@ def test_leveling_loop_retries_story_step_until_completion_then_advances(monkeyp
 
     bot = Mock(level=8, current_map="sevencircles-100000", room_id=42)
     runtime = farming.FarmingRuntime(bot=bot)
+    # Probe farming 7981 ditolak → story repair
     runtime.feed_packet(
-        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7977,"msg":"Missing requirement"}}}'
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":0,"QuestID":7981,"msg":"Missing requirement"}}}'
     )
     runtime.feed_packet(
         '{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7968,"msg":"success"}}}'
@@ -773,7 +789,7 @@ def test_farming_orchestrator_stays_active_and_joins_farm_map(mock_server, tmp_p
     assert [monster.map_id for monster in alive] == [1]
     orch.farming.attack("Water Draconian")
     time.sleep(0.2)
-    assert any("%xt%zm%gar%1%0%a4>m:1%wvz%" in p for p in mock_server.received)
+    assert any("%xt%zm%gar%42%0%a4>m:1%wvz%" in p for p in mock_server.received)
 
     orch.shutdown()
 

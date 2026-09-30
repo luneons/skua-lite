@@ -211,13 +211,13 @@ def test_engine_scans_water_draconian_and_sends_area_skill_then_cooldown_fallbac
     engine.feed(_mage_skills_packet())
 
     assert engine.tick() is True
-    assert sent == ["%xt%zm%gar%1%0%a4>m:2,a4>m:1%wvz%"]
+    assert sent == ["%xt%zm%gar%42%0%a4>m:2,a4>m:1%wvz%"]
     # Global cooldown blocks non-AA skills, but Game.as permits the AA fallback.
     assert engine.tick() is True
-    assert sent[-1] == "%xt%zm%gar%1%1%aa>m:2%wvz%"
+    assert sent[-1] == "%xt%zm%gar%42%1%aa>m:2%wvz%"
     # a4 is cooling down, so after GCD the next ready Mage entry is a2.
     assert engine.tick() is True
-    assert sent[-1] == "%xt%zm%gar%1%2%a2>m:2%wvz%"
+    assert sent[-1] == "%xt%zm%gar%42%2%a2>m:2%wvz%"
 
 
 def test_engine_requires_live_matching_class_and_monster():
@@ -419,14 +419,14 @@ def test_engine_auto_mode_attacks_any_alive_monster_from_area_scan():
     engine.set_auto(True)
     assert engine.auto is True
     assert engine.tick() is True
-    assert sent == ["%xt%zm%gar%1%0%a4>m:3,a4>m:2,a4>m:1%wvz%"]
+    assert sent == ["%xt%zm%gar%42%0%a4>m:3,a4>m:2,a4>m:1%wvz%"]
 
     engine.set_auto(False)
     assert engine.auto is False
     # Named mode is back: only Water Draconian is eligible, and the 1.5s GCD
     # after a4 leaves `aa` as the ready fallback.
     assert engine.tick() is True
-    assert sent[-1] == "%xt%zm%gar%1%1%aa>m:2%wvz%"
+    assert sent[-1] == "%xt%zm%gar%42%1%aa>m:2%wvz%"
 
 
 def test_engine_map_goal_moves_to_other_enemy_cell_and_keeps_fighting():

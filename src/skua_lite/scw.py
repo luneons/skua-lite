@@ -55,9 +55,12 @@ class SCWDependencyPlanner:
         self.quests = quest_state
 
     def unlocked(self) -> bool:
+        """Farming terbuka HANYA jika 7977 sudah selesai (ccqr sukses), atau
+        server sudah menerima salah satu quest farming (7979/7980/7981).
+        Menerima quest 7977 saja TIDAK cukup — server bisa terima acceptQuest(7977)
+        walau story di akun belum selesai.
+        """
         if self.quests.completed(SCW_GATE_QUEST):
-            return True
-        if self.quests.accepted(SCW_GATE_QUEST):
             return True
         for q in (7979, 7980, 7981):
             if self.quests.accepted(q):
@@ -68,9 +71,8 @@ class SCWDependencyPlanner:
         return SCW_XP_SPOT if self.unlocked() else None
 
     def next_prerequisite(self) -> QuestStep | None:
+        """Quest pertama dalam chain yang belum diselesaikan (belum ccqr sukses)."""
         for step in SEVEN_CIRCLES_CHAIN:
-            if self.quests.accepted(step.quest_id):
-                return step
             if not self.quests.completed(step.quest_id):
                 return step
         return None

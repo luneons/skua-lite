@@ -867,8 +867,9 @@ class AutoAttackEngine:
             targets = self._targets_for(skill, monsters)
             if len(targets) < skill.min_targets:
                 return False
+            room_id = _as_int(getattr(self.bot, "room_id", 0), 1)
             packet = sfs.gar_packet(
-                room=1,
+                room=room_id if room_id > 0 else 1,
                 action_id=self._action_id,
                 action_ref=skill.ref,
                 targets=targets,
