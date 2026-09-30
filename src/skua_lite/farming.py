@@ -845,6 +845,17 @@ class FarmingRuntime:
 
             # Move cell if needed
             combat_state = self.combat.state
+            # Jika karakter mati, beri waktu bagi combat engine mengurus respawn
+            p_state = getattr(combat_state, "player_state", 1)
+            p_hp = getattr(combat_state, "hp", 100)
+            seen = getattr(combat_state, "seen_self", False)
+            if seen and (
+                isinstance(p_state, (int, float)) and p_state <= 0
+                or isinstance(p_hp, (int, float)) and p_hp <= 0
+            ):
+                self._on_log("[COMBAT] karakter mati; menunggu respawn dari engine")
+                time.sleep(3.0)
+                continue
             if combat_state.cell != spot.cell and combat_state.map_file_name:
                 try:
                     self.move_to_cell(spot.cell, spot.pad)

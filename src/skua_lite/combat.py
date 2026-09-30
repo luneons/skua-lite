@@ -972,7 +972,7 @@ class AutoAttackEngine:
         """
         if self._death_at is None:
             self._death_at = now
-            return
+            self.on_log(f"[COMBAT] karakter mati; menunggu respawn ({self.respawn_delay:.0f}s)")
         if self._respawn_sent or (now - self._death_at) < self.respawn_delay:
             return
         uid = self.state.self_user_id or _as_int(
@@ -986,7 +986,7 @@ class AutoAttackEngine:
         self.bot._send_raw(sfs.res_player_timed_packet(uid, room=room))
         self._respawn_sent = True
         self.last_action = "respawn -> p:%d" % uid
-        self.on_log(f"[COMBAT] mati {self.respawn_delay:.0f}s -> minta respawn")
+        self.on_log(f"[COMBAT] timer respawn selesai -> kirim resPlayerTimed (p:{uid})")
 
     def _choose_skill(self, now: float) -> SkillState | None:
         # Game.as applies a 1500ms global cooldown to every non-AA action.
