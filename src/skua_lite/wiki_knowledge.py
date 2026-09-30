@@ -35,12 +35,14 @@ ALIASES = {
 }
 _SOURCE_HINT_RE = re.compile(
     r"(?:dapat|dapet|dropped?|drop|asal|source|sumber|where|from|cara dapat|"
-    r"dari mana|di mana|dimana|quest|merge|shop|beli|farm)", re.IGNORECASE,
+    r"dari mana|di mana|dimana|quest|syarat|syaratnya|requirement|requirements|"
+    r"lokasi|location|join|peta|map|apa|merge|shop|beli|farm)", re.IGNORECASE,
 )
 _QUESTION_TRIM_RE = re.compile(
     r"\b(?:item|ini|itu|yg|yang|dapat|dapet|didapat|didapet|dari|di|mana|"
     r"dimana|where|from|source|sumber|cara|gimana|bagaimana|drop|oleh|siapa|"
-    r"quest|shop|merge|beli|farm|nya|dong|bro|gan|aqw)\b",
+    r"quest|syarat|syaratnya|requirement|requirements|lokasi|location|join|peta|"
+    r"map|apa|shop|merge|beli|farm|nya|dong|bro|gan|aqw)\b",
     re.IGNORECASE,
 )
 _VARIANT_RE = re.compile(
@@ -383,6 +385,7 @@ class WikiHit:
     wiki_url: str
     match_kind: str
     confidence: float = 1.0
+    kind: str = "item"
 
     def short_answer(self, limit: int = 150) -> str:
         text = " ".join(self.answer.split())
@@ -460,12 +463,155 @@ class WikiKnowledge:
             return ""
         hit = self.lookup_item(message)
         if hit is None or hit.confidence < 0.80:
+            hit = self.lookup_location(message) or self.lookup_quest(message)
+        if hit is None or hit.confidence < 0.80:
             return ""
         return (
-            "KONTEKS WIKI AQW (database lokal; gunakan sebagai fakta, jangan mengarang):\n"
-            f"Item: {hit.name}\nKategori: {hit.category}\n{hit.answer}\n"
+            f"KONTEKS WIKI AQW (database lokal; gunakan sebagai fakta, jangan mengarang):\n"
+            f"Jenis: {hit.kind}\nItem: {hit.name}\nKategori: {hit.category}\n{hit.answer}\n"
             f"Halaman: {hit.wiki_url}"
         )[:1800]
+
+    def lookup_location(self, query: str) -> WikiHit | None:
+        """Resolve a map/location question to its join command and monsters."""
+        con = self._connection()
+        wanted = self._clean_query(query)
+        if con is None or not wanted:
+            return None
+        alias = ALIASES.get(wanted, wanted)
+        with self._lock:
+            loc = con.execute(
+                "SELECT * FROM locations WHERE lower(name)=? OR map_cf=? "
+                "ORDER BY loc_id LIMIT 1",
+                (alias, alias),
+            ).fetchone()
+            if loc is None:
+                loc = self._location_fuzzy(con, alias)
+            if loc is None:
+                return None
+            monsters = [
+                row["monster_name"]
+                for row in con.execute(
+                    "SELECT monster_name FROM loc_monsters WHERE loc_id=? "
+                    "ORDER BY monster_cf LIMIT 5",
+                    (loc["loc_id"],),
+                ).fetchall()
+            ]
+            joined = f" {loc['join_cmd']}" if loc["join_cmd"] else ""
+            answer = f"{loc['name']} \u2014 map {loc['map_name'] or loc['name']}{joined}."
+            if monsters:
+                answer += " Monster terdaftar: " + ", ".join(monsters) + "."
+            return WikiHit(
+                loc["name"], "location", answer,
+                f"{WIKI_BASE}{loc['slug']}", "exact", 1.0, "location",
+            )
+
+    def lookup_quest(self, query: str) -> WikiHit | None:
+        """Resolve a quest question to NPC, location, requirements, rewards."""
+        con = self._connection()
+        cleaned = self._clean_query(query)
+        if con is None or not cleaned:
+            return None
+        with self._lock:
+            quest = con.execute(
+                "SELECT q.*, qp.slug AS page_slug FROM quests q "
+                "JOIN quest_pages qp ON qp.page_id=q.page_id "
+                "WHERE q.name_cf=? ORDER BY q.quest_id LIMIT 1",
+                (cleaned,),
+            ).fetchone()
+            if quest is None:
+                quest = self._quest_fuzzy(con, cleaned)
+            if quest is None:
+                return None
+            reqs = [
+                f"{row['req_name']} x{row['qty']}"
+                for row in con.execute(
+                    "SELECT req_name, qty FROM quest_requirements WHERE quest_id=? "
+                    "ORDER BY req_cf LIMIT 12",
+                    (quest["quest_id"],),
+                ).fetchall()
+            ]
+            rewards = [
+                f"{row['item_name']} x{row['qty']}"
+                for row in con.execute(
+                    "SELECT item_name, qty FROM quest_rewards WHERE quest_id=? "
+                    "ORDER BY item_cf LIMIT 8",
+                    (quest["quest_id"],),
+                ).fetchall()
+            ]
+            loc = self._location_text(con, quest["loc_name"])
+            answer = f"Quest {quest['name']}"
+            if quest["npc_name"]:
+                answer += f" dari NPC {quest['npc_name']}"
+            if loc:
+                answer += f" di {loc}"
+            requirements_note = quest["requirements_note"]
+            if requirements_note:
+                answer += f". Syarat: {requirements_note}"
+            if reqs:
+                answer += "; butuh " + ", ".join(reqs)
+            if rewards:
+                answer += "; reward " + ", ".join(rewards)
+            answer += "."
+            return WikiHit(
+                quest["name"], "quest", answer,
+                f"{WIKI_BASE}{quest['page_slug'] or ''}", "exact", 1.0, "quest",
+            )
+
+    def suggest_farm(self, monster: str) -> str:
+        """One honest next step for farming a monster: join the proven map."""
+        text = str(monster or "").strip()
+        if not text or not self.ready:
+            return ""
+        con = self._connection()
+        if con is None:
+            return ""
+        cleaned = _norm(text)
+        with self._lock:
+            loc = con.execute(
+                "SELECT l.name, l.join_cmd FROM loc_monsters m "
+                "JOIN locations l ON l.loc_id=m.loc_id "
+                "WHERE m.monster_cf=? OR m.monster_cf LIKE ? "
+                "ORDER BY l.loc_id LIMIT 1",
+                (cleaned, f"{cleaned}%"),
+            ).fetchone()
+        if loc is None:
+            return ""
+        where = f"{loc['name']} {loc['join_cmd']}".strip()
+        return f"{text} muncul di {where}. Mulai: .join {loc['name']} lalu .attack {text}"
+
+    def _location_fuzzy(self, con: sqlite3.Connection, query: str) -> sqlite3.Row | None:
+        token = next((t for t in _WORD_RE.findall(query) if len(t) >= 4), "")
+        if not token:
+            return None
+        candidates = con.execute(
+            "SELECT * FROM locations WHERE lower(name) LIKE ? LIMIT 250",
+            (f"%{token[:5]}%",),
+        ).fetchall()
+        if not candidates:
+            return None
+        names = [row["name"].casefold() for row in candidates]
+        close = difflib.get_close_matches(query, names, n=1, cutoff=0.7)
+        if not close:
+            return None
+        return next(row for row in candidates if row["name"].casefold() == close[0])
+
+    def _quest_fuzzy(self, con: sqlite3.Connection, query: str) -> sqlite3.Row | None:
+        token = next((t for t in _WORD_RE.findall(query) if len(t) >= 4), "")
+        if not token:
+            return None
+        candidates = con.execute(
+            "SELECT * FROM quests WHERE name_cf LIKE ? LIMIT 250",
+            (f"%{token[:5]}%",),
+        ).fetchall()
+        if not candidates:
+            return None
+        names = [row["name_cf"] for row in candidates]
+        close = difflib.get_close_matches(query, names, n=1, cutoff=0.7)
+        if not close:
+            return None
+        return next(row for row in candidates if row["name_cf"] == close[0])
+
 
     @staticmethod
     def _clean_query(query: str) -> str:

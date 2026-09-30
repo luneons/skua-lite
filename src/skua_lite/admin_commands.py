@@ -61,7 +61,7 @@ def resolve_room_target(map_name: str, *, private: bool) -> str:
 
 
 _COMMANDS = (
-    "cari", "dapat", "item", "quest", "shop", "upgrade", "exec", "run",
+    "cari", "dapat", "item", "quest", "shop", "farm", "upgrade", "exec", "run",
     "join", "move", "status", "bantuan", "help", "admin",
 )
 
@@ -121,7 +121,9 @@ class AdminCommandHandler:
         if verb == "cari":
             return AdminOutcome(True, self._blocking(self.tools.web_search, arg, arg))
         if verb in ("dapat", "item", "quest", "shop"):
-            return AdminOutcome(True, self._wiki_lookup(arg))
+            return AdminOutcome(True, self._wiki_lookup(arg, kind=verb))
+        if verb == "farm":
+            return AdminOutcome(True, self._farm_suggestion(arg))
         if verb == "upgrade":
             return AdminOutcome(True, self._upgrade(arg))
         if verb == "exec":
@@ -141,19 +143,44 @@ class AdminCommandHandler:
         return AdminOutcome(True, self.HELP_TEXT)
 
     # -- long-running tools ------------------------------------------------
-    def _wiki_lookup(self, query: str) -> str:
-        """Answer from the local Wiki DB (<10ms); never touches the network."""
+    def _wiki_lookup(self, query: str, *, kind: str = "dapat") -> str:
+        """Answer one routed question from the local Wiki DB (<10ms)."""
         text = (query or "").strip()
         if not text:
             return "Format: !dapat <nama item>, misal !dapat Burning Blade"
         try:
-            hit = self.wiki.lookup_item(text) if self.wiki is not None else None
+            if self.wiki is None:
+                hit = None
+            elif kind == "quest":
+                hit = self.wiki.lookup_quest(text) or self.wiki.lookup_item(text)
+            elif kind == "shop":
+                hit = self.wiki.lookup_item(text) or self.wiki.lookup_quest(text)
+            else:
+                hit = (
+                    self.wiki.lookup_item(text)
+                    or self.wiki.lookup_location(text)
+                    or self.wiki.lookup_quest(text)
+                )
         except Exception as exc:  # noqa: BLE001 - a tool must never crash chat
             self.on_log(f"[ADMIN] wiki error: {exc}")
             return "Database wiki belum siap."
         if hit is None:
-            return "Item tidak ketemu di wiki lokal. Coba !cari <nama item>."
+            return "Tidak ketemu di wiki lokal. Coba !cari <nama>."
         return self._clamp(hit.short_answer(150))
+
+    def _farm_suggestion(self, query: str) -> str:
+        """Suggest only a wiki-proven map target; never invents monsters/maps."""
+        text = (query or "").strip()
+        if not text:
+            return "Format: !farm <nama monster>, misal !farm Diabolical Warlord"
+        try:
+            suggestion = self.wiki.suggest_farm(text) if self.wiki is not None else ""
+        except Exception as exc:  # noqa: BLE001 - a tool must never crash chat
+            self.on_log(f"[ADMIN] wiki error: {exc}")
+            return "Database wiki belum siap."
+        if not suggestion:
+            return "Tidak ada lokasi monster itu di wiki lokal."
+        return self._clamp(suggestion)
 
     def _blocking(self, call, display: str, arg: str) -> str:
         """Run a tool synchronously and convert the evidence into a reply."""

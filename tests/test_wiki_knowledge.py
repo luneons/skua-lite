@@ -172,6 +172,59 @@ def test_fuzzy_match_does_not_enter_router_context(tmp_path):
     assert wiki.context_for("Burnig Blad dimana?") == ""
 
 
+def test_location_lookup_returns_join_and_observed_monsters(tmp_path):
+    db = tmp_path / "wiki.db"
+    build_wiki_database(_source_dir(tmp_path), db)
+    wiki = WikiKnowledge(db)
+
+    hit = wiki.lookup_location("Underworld dimana?")
+
+    assert hit is not None
+    assert hit.category == "location"
+    assert "/join underworld" in hit.answer
+    assert "Diabolical Warlord" in hit.answer
+
+
+def test_quest_lookup_returns_npc_location_requirements_and_rewards(tmp_path):
+    db = tmp_path / "wiki.db"
+    build_wiki_database(_source_dir(tmp_path), db)
+    wiki = WikiKnowledge(db)
+
+    hit = wiki.lookup_quest("Void Highlord's Challenge syaratnya apa?")
+
+    assert hit is not None
+    assert hit.category == "quest"
+    assert "Nulgath" in hit.answer
+    assert "/join tercessuinotlim" in hit.answer
+    assert "Roentgenium of Nulgath x15" in hit.answer
+    assert "Void Highlord (Class) x1" in hit.answer
+
+
+def test_wiki_context_routes_location_and_quest_questions(tmp_path):
+    db = tmp_path / "wiki.db"
+    build_wiki_database(_source_dir(tmp_path), db)
+    wiki = WikiKnowledge(db)
+
+    location = wiki.context_for("Underworld join dimana?")
+    quest = wiki.context_for("Void Highlord's Challenge syaratnya apa?")
+
+    assert "Jenis: location" in location
+    assert "/join underworld" in location
+    assert "Jenis: quest" in quest
+    assert "Roentgenium of Nulgath x15" in quest
+
+
+def test_farm_suggestion_resolves_monster_to_joinable_location(tmp_path):
+    db = tmp_path / "wiki.db"
+    build_wiki_database(_source_dir(tmp_path), db)
+    wiki = WikiKnowledge(db)
+
+    suggestion = wiki.suggest_farm("Diabolical Warlord")
+
+    assert "Diabolical Warlord" in suggestion
+    assert "/join underworld" in suggestion
+
+
 def test_missing_database_and_unrelated_question_are_safe(tmp_path):
     wiki = WikiKnowledge(tmp_path / "missing.db")
     assert wiki.lookup_item("Burning Blade") is None

@@ -263,7 +263,8 @@ def print_farm_help() -> None:
     print("  .equip <nomor|nama>         -> pakai item")
     print("  .drop / .rest / .booster / .aggro / .quest / .sell / .bank")
     print("INFO")
-    print("  .status / .area / .dapat <item> / .chat <pesan|/command>")
+    print("  .status / .area / .dapat <item> / .wiki <item|lokasi|quest>")
+    print("  .saranfarm <monster>        -> cari map monster dari wiki")
     print("Tanpa -private = room publik; -private = room 100000.")
 
 
@@ -353,7 +354,7 @@ def parse_farm_command(raw: str) -> tuple[str, str]:
         "quest", "sell", "bank", "attack", "cell", "cells", "combat",
         "capture", "chat", "goal", "area", "class", "auto", "item", "equip",
         "weapon", "armor", "helm", "cape", "level", "leveling", "dapat", "wiki",
-        "help", "dashboard", "ui",
+        "saranfarm", "help", "dashboard", "ui",
     }
     if action not in known:
         return "", ""
@@ -558,11 +559,25 @@ def dispatch_farm(orch: Any, action: str, arg: str) -> str | None:
         elif action in {"dapat", "wiki"}:
             if not arg.strip():
                 raise ValueError("format: .dapat <nama item>")
-            hit = _farm_wiki(orch).lookup_item(arg.strip())
+            wiki = _farm_wiki(orch)
+            query = arg.strip()
+            hit = (
+                wiki.lookup_item(query)
+                or wiki.lookup_location(query)
+                or wiki.lookup_quest(query)
+            )
             if hit is None:
-                print("[WIKI] item tidak ketemu di database lokal.")
+                print("[WIKI] tidak ketemu di database lokal.")
             else:
                 print(f"[WIKI] {hit.answer}")
+        elif action == "saranfarm":
+            if not arg.strip():
+                raise ValueError("format: .saranfarm <nama monster>")
+            suggestion = _farm_wiki(orch).suggest_farm(arg.strip())
+            if not suggestion:
+                print("[WIKI] tidak ada lokasi monster itu di database lokal.")
+            else:
+                print(f"[WIKI] {suggestion}")
         elif action == "item":
             parts = arg.split(maxsplit=1)
             sub = parts[0].lower() if parts else "scan"

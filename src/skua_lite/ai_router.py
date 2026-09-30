@@ -713,6 +713,7 @@ class AIChatRouter:
                 and not mentions_mele(text)
                 and not self.guide.context_for(text)
                 and not self._knowledge.context_for(text)
+                and not (self._wiki is not None and self._wiki.context_for(text))
             ):
                 return False
             generation = self._generation
