@@ -281,6 +281,46 @@ class Orchestrator:
         self.connect(u, p)
         self._restore_state(snap)
 
+    def switch_server(self, server_name: str) -> str:
+        """Ganti server tujuan dan reconnect bot."""
+        name = str(server_name or "").strip()
+        if not name:
+            return "Nama server tidak boleh kosong."
+        try:
+            srv_list = servers.fetch_server_list()
+            server = servers.pick(srv_list, name)
+        except servers.ServerUnavailable as e:
+            return f"Gagal ganti server: {e}"
+        except Exception as e:
+            return f"Gagal mengambil daftar server: {e}"
+
+        self.server_name = server.name
+        try:
+            self.restart()
+            return f"Berhasil berpindah ke server {server.name}."
+        except Exception as e:
+            return f"Gagal koneksi ke server {server.name}: {e}"
+
+    def switch_account(self, username: str, password: str) -> str:
+        """Ganti akun yang digunakan, simpan terenkripsi, lalu koneksi."""
+        u = str(username or "").strip()
+        p = str(password or "").strip()
+        if not u or not p:
+            return "Username dan password wajib diisi. Contoh: /gantiakun user pass"
+
+        self.store.save(u, p)
+        if self.bot:
+            try:
+                self.bot.stop()
+            except Exception:
+                pass
+
+        try:
+            self.connect(u, p)
+            return f"Berhasil login sebagai '{u}'."
+        except Exception as e:
+            return f"Gagal login akun baru: {e}"
+
     def start_telegram_control(self, config: TelegramConfig | None = None) -> bool:
         """Start one owner-only Telegram long-poll controller when configured."""
         if self.mode is not RunMode.FARMING or self.farming is None or self.bot is None:

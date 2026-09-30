@@ -276,6 +276,40 @@ def test_stop_command_stops_leveling_attack_and_goal():
     assert ("auto", "stop") in calls
 
 
+def test_settings_and_change_server_commands():
+    calls: list[tuple] = []
+    transport = FakeTransport()
+    orch = SimpleNamespace(
+        server_name="Yorumi",
+        bot=SimpleNamespace(username="Hero123", current_map="oaklore-1", state="IN_MAP"),
+        store=SimpleNamespace(load=lambda: ("Hero123", "pw")),
+        switch_server=lambda s: f"OK: switch ke {s}",
+    )
+    control = _control(transport, calls, orch=orch)
+
+    # 1. /pengaturan
+    control.handle_message(_message("/pengaturan"))
+    assert len(transport.sent) == 1
+    assert "Hero123" in transport.sent[0][1]
+    assert "Yorumi" in transport.sent[0][1]
+
+    # 2. /gantiserver dengan nama server
+    control.handle_message(_message("/gantiserver Artix"))
+    assert "switch ke Artix" in transport.sent[1][1]
+
+    # 3. /gantiakun
+    control.handle_message(_message("/gantiakun"))
+    assert "GANTI AKUN" in transport.sent[2][1]
+
+    # 4. Callback settings
+    control.handle_callback(_callback("special|settings|"))
+    assert "PENGATURAN" in transport.edits[0][2]
+
+    # 5. Callback srv
+    control.handle_callback(_callback("special|srv|Twilly"))
+    assert "switch ke Twilly" in transport.edits[1][2]
+
+
 # ---------------------------------------------------------------- polling
 
 

@@ -202,6 +202,11 @@ _ALIASES = {
     "wiki": "wiki",
     "dapat": "dapat",
     "saranfarm": "saranfarm",
+    "pengaturan": "__settings__",
+    "setting": "__settings__",
+    "config": "__settings__",
+    "gantiserver": "__change_server__",
+    "gantiakun": "__change_account__",
 }
 
 
@@ -219,6 +224,12 @@ def parse_telegram_command(text: str) -> tuple[str, Any]:
         return "__panel__", ""
     if verb in {"stop", "berhenti"}:
         return "__stop__", ""
+    if verb in {"pengaturan", "setting", "config"}:
+        return "__settings__", ""
+    if verb == "gantiserver":
+        return "__change_server__", arg
+    if verb == "gantiakun":
+        return "__change_account__", arg
     action = _ALIASES.get(verb)
     return (action, arg) if action else ("", "")
 
@@ -239,6 +250,7 @@ def panel_buttons() -> list[list[dict[str, str]]]:
         ],
         [
             {"text": "Refresh", "callback_data": "special|panel|"},
+            {"text": "Pengaturan", "callback_data": "special|settings|"},
         ],
     ]
 
@@ -259,6 +271,9 @@ def help_text() -> str:
         "/class, /weapon, /armor, /helm, /cape\n"
         "/wiki <item|lokasi|quest>\n"
         "/saranfarm <monster>\n"
+        "/pengaturan - info akun, server, Telegram owner\n"
+        "/gantiserver [nama_server] - ganti server (tanpa arg: daftar server)\n"
+        "/gantiakun - petunjuk ganti akun (Hint: simpan dulu lewat terminal)\n"
         "/stop - hentikan leveling, combat, dan auto\n"
     )
 
@@ -329,6 +344,89 @@ class TelegramControl:
                 outputs.append(text)
         return _bounded("\n".join(outputs) or "Semua aktivitas dihentikan.")
 
+    def _settings_text(self) -> str:
+        orch = self.orch
+        server = getattr(orch, "server_name", "N/A")
+        bot = getattr(orch, "bot", None)
+        account = getattr(bot, "username", "")
+        if not account:
+            try:
+                store = getattr(orch, "store", None)
+                if store:
+                    account, _ = store.load()
+            except Exception:
+                account = "(belum ada)"
+        map_name = getattr(bot, "current_map", "N/A") if bot else "N/A"
+        state = getattr(bot, "state", "N/A") if bot else "N/A"
+        return _bounded(
+            f"=== PENGATURAN SKUA-LITE ===\n"
+            f"Akun Aktif   : {account}\n"
+            f"Server       : {server}\n"
+            f"Map/Lokasi   : {map_name}\n"
+            f"Status Bot   : {state}\n"
+            f"Telegram ID  : {self.owner_id}\n\n"
+            f"Perintah Pengaturan:\n"
+            f"- /gantiserver [nama_server] -> ganti server & reconnect\n"
+            f"- /gantiakun -> panduan ganti akun"
+        )
+
+    def _handle_change_server(self, arg: str) -> tuple[str, list[list[dict[str, str]]] | None]:
+        clean = str(arg or "").strip()
+        orch = self.orch
+        if clean:
+            if hasattr(orch, "switch_server"):
+                res = orch.switch_server(clean)
+                return _bounded(res), panel_buttons()
+            return f"Gagal ganti server ke '{clean}': method switch_server tidak tersedia.", panel_buttons()
+
+        # Tanpa argumen: tampilkan daftar server yang online
+        from . import servers
+        try:
+            srv_list = servers.fetch_server_list()
+        except Exception as e:
+            return f"Gagal mengambil daftar server: {e}", panel_buttons()
+
+        lines = ["=== DAFTAR SERVER AQW ==="]
+        buttons: list[list[dict[str, str]]] = []
+        row: list[dict[str, str]] = []
+        for name, s in srv_list.items():
+            status = "ONLINE" if s.online else "OFFLINE"
+            if s.full:
+                status += " (PENUH)"
+            if s.upgrade_only:
+                status += " (UPG)"
+            lines.append(f"- {name}: {status}")
+            if s.online and not s.full and not s.upgrade_only:
+                row.append({"text": name, "callback_data": f"special|srv|{name}"})
+                if len(row) >= 2:
+                    buttons.append(row)
+                    row = []
+        if row:
+            buttons.append(row)
+        buttons.append([{"text": "« Kembali ke Panel", "callback_data": "special|panel|"}])
+        lines.append("\nPilih tombol di bawah atau ketik `/gantiserver <nama>`.")
+        return _bounded("\n".join(lines)), buttons
+
+    def _handle_change_account(self, arg: str) -> tuple[str, list[list[dict[str, str]]] | None]:
+        clean = str(arg or "").strip()
+        if clean:
+            return (
+                "Demi keamanan password, penggantian akun tidak diperkenankan memasukkan password via chat Telegram.\n\n"
+                "Untuk mengganti akun yang tersimpan:\n"
+                "Jalankan skua-lite di terminal/CLI untuk login akun baru, dan pilih [Y] untuk menyimpan kredensial ke disk lokal yang terenkripsi.",
+                panel_buttons(),
+            )
+        return (
+            "=== GANTI AKUN AQW ===\n"
+            "Kredensial tersimpan secara aman di mesin lokal menggunakan enkripsi DPAPI/Fernet.\n\n"
+            "Untuk ganti akun:\n"
+            "1. Hentikan bot di terminal\n"
+            "2. Jalankan `python -m skua_lite --mode farming`\n"
+            "3. Masukkan username dan password baru di terminal\n"
+            "4. Kredensial baru akan otomatis terenkripsi dan dipakai oleh Telegram.",
+            panel_buttons(),
+        )
+
     def handle_message(self, message: Mapping[str, Any]) -> None:
         sender = message.get("from") or {}
         chat = message.get("chat") or {}
@@ -347,6 +445,16 @@ class TelegramControl:
             )
         elif action == "__stop__":
             self.transport.send_message(chat_id, self._execute_stop(), buttons=panel_buttons())
+        elif action == "__settings__":
+            self.transport.send_message(
+                chat_id, self._settings_text(), buttons=self._settings_buttons()
+            )
+        elif action == "__change_server__":
+            text, buttons = self._handle_change_server(arg)
+            self.transport.send_message(chat_id, text, buttons=buttons)
+        elif action == "__change_account__":
+            text, buttons = self._handle_change_account(arg)
+            self.transport.send_message(chat_id, text, buttons=buttons)
         elif action:
             self.transport.send_message(
                 chat_id, self._execute(action, arg), buttons=panel_buttons()
@@ -364,6 +472,18 @@ class TelegramControl:
             return _bounded("\n".join(farm_dashboard_lines(self.orch)))
         except Exception as exc:
             return _bounded(f"Panel belum siap: {exc}")
+
+    def _settings_buttons(self) -> list[list[dict[str, str]]]:
+        return [
+            [
+                {"text": "Ganti Server", "callback_data": "special|changeserver|"},
+                {"text": "Info Ganti Akun", "callback_data": "special|changeaccount|"},
+            ],
+            [
+                {"text": "Refresh Pengaturan", "callback_data": "special|settings|"},
+                {"text": "« Ke Panel", "callback_data": "special|panel|"},
+            ],
+        ]
 
     def handle_callback(self, callback: Mapping[str, Any]) -> None:
         sender = callback.get("from") or {}
@@ -383,10 +503,23 @@ class TelegramControl:
         kind, action, arg = pieces
         if kind == "special" and action == "stop":
             text = self._execute_stop()
+            new_buttons = panel_buttons()
         elif kind == "special" and action == "panel":
             text = self._panel_text()
+            new_buttons = panel_buttons()
+        elif kind == "special" and action == "settings":
+            text = self._settings_text()
+            new_buttons = self._settings_buttons()
+        elif kind == "special" and action == "changeserver":
+            text, new_buttons = self._handle_change_server(arg)
+        elif kind == "special" and action == "changeaccount":
+            text, new_buttons = self._handle_change_account(arg)
+        elif kind == "special" and action == "srv":
+            # Tombol server langsung dari daftar server
+            text, new_buttons = self._handle_change_server(arg)
         elif kind == "cmd" and action in set(_ALIASES.values()):
             text = self._execute(action, arg)
+            new_buttons = panel_buttons()
         else:
             self.transport.answer_callback_query(callback_id, "Tombol tidak dikenal")
             return
@@ -395,12 +528,12 @@ class TelegramControl:
         if message_id:
             try:
                 self.transport.edit_message_text(
-                    chat_id, message_id, text, buttons=panel_buttons()
+                    chat_id, message_id, text, buttons=new_buttons
                 )
                 return
             except TelegramError:
                 pass
-        self.transport.send_message(chat_id, text, buttons=panel_buttons())
+        self.transport.send_message(chat_id, text, buttons=new_buttons)
 
     def poll_once(self, offset: int | None) -> int | None:
         updates = self.transport.get_updates(offset=offset, timeout=25)
