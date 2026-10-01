@@ -36,12 +36,23 @@ def test_planner_unlocks_when_7977_is_completed():
     assert planner.best_xp_spot() == SCW_XP_SPOT
 
 
-def test_planner_unlocks_when_any_farming_quest_is_accepted():
+def test_planner_unlocks_when_story_slot_requirement_is_met():
+    # Slot 395 bernilai 10 membuktikan story Seven Circles selesai di server
     qs = QuestState()
-    qs.feed(_accept(7981, success=1))
+    qs.note_quest_slots(["0"] * 395 + ["10"])
     planner = SCWDependencyPlanner(qs)
     assert planner.unlocked()
     assert planner.best_xp_spot() == SCW_XP_SPOT
+
+
+def test_planner_locks_when_story_slot_is_zero():
+    # Akun baru: slot 395 bernilai 0 -> story BELUM selesai, wajib 7968 di sevencircles
+    qs = QuestState()
+    qs.note_quest_slots(["0"] * 395 + ["0"])
+    planner = SCWDependencyPlanner(qs)
+    assert not planner.unlocked()
+    assert planner.best_xp_spot() is None
+    assert planner.next_prerequisite().quest_id == 7968
 
 
 def test_next_prerequisite_advances_sequentially():

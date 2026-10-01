@@ -87,11 +87,12 @@ class SCWDependencyPlanner:
             return True
         if story is False:
             return False
+        # Data slot belum tersedia: percaya ccqr(7977) sukses saja.
+        # JANGAN percaya accepted(farming quest) — AQW menerima acceptQuest
+        # oleh id di akun baru walau story belum selesai, dan turn-in tetap
+        # gagal. Accept bukan bukti unlock.
         if self.quests.completed(SCW_GATE_QUEST):
             return True
-        for q in (7979, 7980, 7981):
-            if self.quests.accepted(q):
-                return True
         return False
 
     def best_xp_spot(self) -> XPSpot | None:

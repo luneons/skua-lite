@@ -881,9 +881,13 @@ class FarmingRuntime:
         # Tunggu probe pertama 7981 selesai sebelum memilih spot awal
         # sehingga bot tidak salah join bracket lalu harus pindah lagi.
         _probe_waited = 0.0
-        self._probe_scw_gate()
+        self._probe_scw_gate()  # kirim retrieveUserData + acceptQuest(7981)
+        from .scw import SCW_GATE_SLOT as _GATE_SLOT
         while _probe_waited < self._probe_wait_s and not self._leveling_stop.is_set():
-            if self.quest_state.status(7981).accepted is not None:
+            # Tunggu salah satu: slot server tersedia ATAU probe 7981 ada verdict
+            slot_ready = self.quest_state.quest_slot_value(_GATE_SLOT) is not None
+            probe_done = self.quest_state.status(7981).accepted is not None
+            if slot_ready or probe_done:
                 break
             time.sleep(0.5)
             _probe_waited += 0.5

@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from . import bot as bot_mod
-from . import cli, config, credentials, farming, login, servers
+from . import cli, config, credentials, farming, login, servers, sfs
 from .credentials import CredentialStore, MultiAccountStore, NoStoredCredentials
 from .auto_planner import AutoGoal
 from .mode import RunMode, select_mode
@@ -238,6 +238,13 @@ class Orchestrator:
             self.farming = None
         b.start()
         self.bot = b
+        # Minta data karakter (strQuests/slot progress) segera setelah login
+        # agar runtime farming tahu persis story mana yang sudah/belum selesai.
+        try:
+            if b.session_user_id > 0 and b.room_id > 0:
+                b._send_raw(sfs.retrieve_user_data_packet(b.room_id, b.session_user_id))
+        except Exception:
+            pass
         if self.farming is not None:
             self.farming.start()
             self.log(f"[FARM] tersedia: {self.farming.status()}")

@@ -14,11 +14,14 @@ def test_farming_turnin_rejection_triggers_story_lock_and_redirects_to_sevencirc
     bot = Mock(username="mel e", session_user_id=1, room_id=42, level=35, state=BotState.IN_MAP)
     runtime = FarmingRuntime(bot=bot)
     
-    # 1. Server terima acceptQuest 7979 & 7981
+    # 1. Server kirim data karakter: story Seven Circles SUDAH selesai (slot395=10)
+    runtime.quest_state.note_quest_slots(["0"] * 395 + ["10"])
+
+    # Server terima acceptQuest 7979 & 7981
     runtime.feed_packet('{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7979,"msg":"success"}}}')
     runtime.feed_packet('{"t":"xt","b":{"r":-1,"o":{"cmd":"acceptQuest","bSuccess":1,"QuestID":7981,"msg":"success"}}}')
-    
-    # Karena 7981 accepted, spot awal adalah sevencircleswar
+
+    # Karena story selesai (slot395>=10), spot awal adalah sevencircleswar
     spot1 = runtime.auto_level_spot()
     assert spot1 is not None
     assert spot1.map_name == "sevencircleswar"
