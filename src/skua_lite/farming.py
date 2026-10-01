@@ -233,11 +233,23 @@ class FarmingRuntime:
                         # karena prerequisite/syarat sebelumnya belum selesai (bukan karena
                         # item kurang / kill belum cukup), itu berarti story Seven Circles
                         # belum selesai. Reset probe dan arahkan ke story 7968.
-                        from .scw import SCW_XP_SPOT, SCWDependencyPlanner, SEVEN_CIRCLES_CHAIN
+                        from .scw import SCW_XP_SPOT, SCWDependencyPlanner, SEVEN_CIRCLES_CHAIN, SCW_GATE_SLOT, SCW_GATE_VALUE
                         farming_quests = {sq for sq in SCW_XP_SPOT.quests}
-                        if quest_id in farming_quests and reason.kind == FailureKind.PREREQUISITE_QUEST:
+                        # Kunci story hanya jika:
+                        # 1. Quest yang gagal adalah quest farming (7979/7980/7981), DAN
+                        # 2. Slot gate server MEMBUKTIKAN story belum selesai (slot < 10).
+                        # Alasan: "Missing Quest Progress" muncul untuk KEDUA kondisi
+                        # (item kurang ATAU story belum selesai). Kita bedakan via slot.
+                        gate_slot_ok = self.quest_state.story_requirement_met(SCW_GATE_SLOT, SCW_GATE_VALUE)
+                        # Explicit prerequisite text is independently authoritative.
+                        # Ambiguous "Missing Quest Progress" needs gate_slot_ok=False.
+                        story_is_blocked = (
+                            gate_slot_ok is False
+                            or reason.kind == FailureKind.PREREQUISITE_QUEST
+                        )
+                        if quest_id in farming_quests and story_is_blocked:
                             self._on_log(
-                                f"[SCW] turn-in quest farming {quest_id} ditolak karena prerequisite; "
+                                f"[SCW] turn-in quest farming {quest_id} ditolak AND slot gate={self.quest_state.quest_slot_value(SCW_GATE_SLOT)}/{SCW_GATE_VALUE}; "
                                 f"reset farming lock → jalankan story Seven Circles dari awal"
                             )
                             self._scw_story_locked = True
@@ -797,7 +809,7 @@ class FarmingRuntime:
             step = planner.next_prerequisite()
             if step is not None:
                 self.leveling_dependency = step
-                return LevelSpot(step.map_name, step.cell or "Enter",
+                return LevelSpot(step.map_name, step.cell,
                                  step.pad, target=step.target,
                                  quests=(step.quest_id,))
             return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
@@ -816,7 +828,7 @@ class FarmingRuntime:
             step = planner.next_prerequisite()
             if step is not None:
                 self.leveling_dependency = step
-                return LevelSpot(step.map_name, step.cell or "Enter",
+                return LevelSpot(step.map_name, step.cell,
                                  step.pad, target=step.target,
                                  quests=(step.quest_id,))
         return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
@@ -943,7 +955,7 @@ class FarmingRuntime:
                 self._on_log("[COMBAT] karakter mati; menunggu respawn dari engine")
                 time.sleep(3.0)
                 continue
-            if combat_state.cell != spot.cell and combat_state.map_file_name:
+            if spot.cell and combat_state.cell != spot.cell and combat_state.map_file_name:
                 try:
                     self.move_to_cell(spot.cell, spot.pad)
                     time.sleep(1.5)

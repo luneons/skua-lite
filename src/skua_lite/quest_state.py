@@ -38,9 +38,16 @@ class QuestState:
         self._quest_slots = list(slots)
 
     def quest_slot_value(self, slot: int) -> int | None:
-        """Nilai slot quest karakter (None = belum ada data server)."""
+        """Nilai slot quest karakter (None = belum ada data server).
+
+        AQW Flash client menyimpan nilai 0-35 per karakter slot menggunakan
+        representasi base-36 (0-9, A=10, B=11, ..., Z=35).
+        """
         try:
-            return int(self._quest_slots[int(slot)])
+            char = str(self._quest_slots[int(slot)]).strip()
+            if not char:
+                return None
+            return int(char, 36)
         except (IndexError, ValueError, TypeError):
             return None
 
@@ -51,6 +58,31 @@ class QuestState:
         if current is None:
             return None
         return current >= int(value)
+
+    def quest_completed_by_slot(self, quest_id: int) -> bool | None:
+        """True jika quest sudah selesai berdasarkan strQuests slot server.
+
+        Ambil iSlot dan iValue dari data getQuests (status.data), lalu
+        bandingkan dengan _quest_slots.
+        - True: strQuests[slot] >= value -> quest sudah pernah diselesaikan
+        - False: strQuests[slot] < value -> quest belum selesai
+        - None: data belum tersedia (slot atau getQuests belum diterima)
+        """
+        status = self._quests.get(int(quest_id))
+        if status is None or not status.data:
+            return None
+        slot = status.data.get("iSlot")
+        value = status.data.get("iValue")
+        if slot is None or value is None:
+            return None
+        try:
+            slot = int(slot)
+            value = int(value)
+        except (TypeError, ValueError):
+            return None
+        if slot < 0:
+            return None  # slot=-1 artinya quest tanpa slot requirement
+        return self.story_requirement_met(slot, value)
 
     def status(self, quest_id: int) -> QuestStatus:
         qid = int(quest_id)

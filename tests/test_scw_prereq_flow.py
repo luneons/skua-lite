@@ -39,7 +39,7 @@ def test_planner_unlocks_when_7977_is_completed():
 def test_planner_unlocks_when_story_slot_requirement_is_met():
     # Slot 395 bernilai 10 membuktikan story Seven Circles selesai di server
     qs = QuestState()
-    qs.note_quest_slots(["0"] * 395 + ["10"])
+    qs.note_quest_slots(["0"] * 395 + ["A"])
     planner = SCWDependencyPlanner(qs)
     assert planner.unlocked()
     assert planner.best_xp_spot() == SCW_XP_SPOT
@@ -65,3 +65,18 @@ def test_next_prerequisite_advances_sequentially():
 
     qs.feed(_ccqr(7969, 1))
     assert planner.next_prerequisite().quest_id == 7970
+
+
+def test_planner_uses_partial_slot_progress_to_resume_at_first_missing_step():
+    qs = QuestState()
+    # Server says slot 395 has value 3: quests 7968-7970 are complete.
+    qs.note_quest_slots(["0"] * 395 + ["3"])
+    planner = SCWDependencyPlanner(qs)
+    assert planner.next_prerequisite().quest_id == 7971
+
+
+def test_slot_value_decodes_base36_gate_values():
+    qs = QuestState()
+    qs.note_quest_slots(["0"] * 395 + ["A"])
+    assert qs.quest_slot_value(395) == 10
+    assert qs.story_requirement_met(395, 10) is True

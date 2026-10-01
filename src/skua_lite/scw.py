@@ -49,6 +49,10 @@ SCW_GATE_QUEST = 7977
 # strQuests[395] >= 10 berarti Seven Circles selesai; kurang dari itu = belum.
 SCW_GATE_SLOT = 395
 SCW_GATE_VALUE = 10
+# Live getQuests(7968..7977): same slot 395, values 1..10.
+SCW_STORY_VALUES: dict[int, int] = {
+    quest_id: value for value, quest_id in enumerate(range(7968, 7978), start=1)
+}
 SCW_XP_SPOT = XPSpot("sevencircleswar", "Enter", "Right", (7979, 7980, 7981), target="Wrath Guard")
 
 
@@ -99,10 +103,39 @@ class SCWDependencyPlanner:
         return SCW_XP_SPOT if self.unlocked() else None
 
     def next_prerequisite(self) -> QuestStep | None:
-        """Quest pertama dalam chain yang belum diselesaikan (belum ccqr sukses)."""
+        """Quest pertama dalam chain yang belum diselesaikan.
+
+        Cek dua sumber bukti:
+        1. ccqr sukses dalam sesi ini (quests.completed)
+        2. strQuests slot server (quests.quest_completed_by_slot)
+        """
+        current_story_value = None
+        try:
+            current_story_value = self.quests.quest_slot_value(SCW_GATE_SLOT)
+        except AttributeError:
+            pass
         for step in SEVEN_CIRCLES_CHAIN:
-            if not self.quests.completed(step.quest_id):
-                return step
+            # Lewati bila ccqr sukses di sesi ini.
+            if self.quests.completed(step.quest_id):
+                continue
+            # Untuk chain 7968..7977, slot 395 langsung menunjukkan langkah
+            # terakhir yang selesai, bahkan sebelum getQuests per-step dimuat.
+            required_value = SCW_STORY_VALUES.get(step.quest_id)
+            if (
+                required_value is not None
+                and current_story_value is not None
+                and current_story_value >= required_value
+            ):
+                continue
+            # Fallback generik bila quest data iSlot/iValue sudah dimuat.
+            slot_status = None
+            try:
+                slot_status = self.quests.quest_completed_by_slot(step.quest_id)
+            except AttributeError:
+                pass
+            if slot_status is True:
+                continue
+            return step
         return None
 
 
