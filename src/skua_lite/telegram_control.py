@@ -322,6 +322,10 @@ def startup_buttons() -> list[list[dict[str, str]]]:
     """Tombol kontekstual saat bot baru start dan menunggu pilihan mode/login di terminal."""
     return [
         [
+            {"text": "🤖 1. Mode AI Asisten", "callback_data": "special|mode|1"},
+            {"text": "⚔️ 2. Mode Farming", "callback_data": "special|mode|2"},
+        ],
+        [
             {"text": "🔄 Cek Status", "callback_data": "special|panel|"},
             {"text": "📖 Panduan Startup", "callback_data": "special|startup_guide|"},
         ],
@@ -777,6 +781,23 @@ class TelegramControl:
         elif kind == "special" and action == "startup_guide":
             text = self._handle_startup_guide()
             new_buttons = self._current_buttons()
+        elif kind == "special" and action == "mode":
+            from .mode import RunMode
+            chosen_mode = (
+                RunMode.ASSISTANT
+                if str(arg).strip().lower() in {"1", "ai", "assistant", "asisten"}
+                else RunMode.FARMING
+            )
+            signal = getattr(self.orch, "startup_signal", None)
+            if signal is not None:
+                signal.set_mode(chosen_mode)
+                text = (
+                    f"✅ Mode {chosen_mode.label} dipilih via Telegram!\n"
+                    f"Terminal sedang memproses mode {chosen_mode.label}..."
+                )
+            else:
+                text = f"Mode {chosen_mode.label} dipilih. Lanjutkan di terminal."
+            new_buttons = self._current_buttons()
         elif kind == "special" and action == "settings":
             text = self._settings_text()
             new_buttons = self._settings_buttons()
@@ -901,6 +922,7 @@ def start_bootstrap_telegram(
     if not cfg.enabled:
         return None
     from types import SimpleNamespace
+    from .mode import StartupSignal
     startup_orch = SimpleNamespace(
         bot=None,
         farming=None,
@@ -908,6 +930,7 @@ def start_bootstrap_telegram(
         server_name="-",
         mode=None,
         startup=True,
+        startup_signal=StartupSignal(),
     )
     control = TelegramControl(
         startup_orch,

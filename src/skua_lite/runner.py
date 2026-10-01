@@ -710,7 +710,13 @@ def run(server_name: str = config.DEFAULT_SERVER, target_map: str | None = None,
         print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
     try:
         try:
-            selected = select_mode(mode)
+            startup_signal = getattr(
+                getattr(bootstrap, "control", None),
+                "orch",
+                None,
+            )
+            startup_signal = getattr(startup_signal, "startup_signal", None)
+            selected = select_mode(mode, signal=startup_signal)
         except ValueError as e:
             print(f"\n[ABORT] {e}", file=sys.stderr)
             return 2

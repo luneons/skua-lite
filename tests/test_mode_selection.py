@@ -38,6 +38,28 @@ def test_select_mode_prompts_until_valid(monkeypatch):
     assert any("tidak dikenal" in line.lower() for line in printed)
 
 
+def test_select_mode_accepts_telegram_signal_without_terminal_input(monkeypatch):
+    """Tombol Telegram harus bisa memilih mode tanpa menunggu Enter di terminal."""
+    import threading
+    import time
+    from skua_lite.mode import StartupSignal
+
+    signal = StartupSignal()
+    printed: list[str] = []
+
+    def choose_from_telegram():
+        time.sleep(0.05)
+        signal.set_mode(RunMode.FARMING)
+
+    threading.Thread(target=choose_from_telegram, daemon=True).start()
+    # Reader thread boleh menunggu input sungguhan; pilihan Telegram harus menang
+    # dengan bounded deadline dan mengembalikan mode.
+    mode = select_mode(output=printed.append, signal=signal)
+
+    assert mode is RunMode.FARMING
+    assert any("telegram" in line.casefold() for line in printed)
+
+
 def test_select_mode_returns_explicit_without_prompt(monkeypatch):
     monkeypatch.setattr(
         builtins, "input", lambda _prompt="": pytest.fail("must not prompt")
@@ -82,7 +104,7 @@ def test_run_prompts_for_account_flow_before_credentials(monkeypatch):
     monkeypatch.setattr(
         runner,
         "select_mode",
-        lambda explicit=None: calls.append("mode") or RunMode.FARMING,
+        lambda explicit=None, signal=None: calls.append("mode") or RunMode.FARMING,
     )
     fake_accounts = object()
     monkeypatch.setattr(runner, "MultiAccountStore", lambda: fake_accounts)
@@ -115,7 +137,7 @@ def test_run_routes_selected_accounts_to_multi(monkeypatch):
     fake_accounts = object()
     observed = {}
 
-    monkeypatch.setattr(runner, "select_mode", lambda explicit=None: RunMode.FARMING)
+    monkeypatch.setattr(runner, "select_mode", lambda explicit=None, signal=None: RunMode.FARMING)
     monkeypatch.setattr(runner, "MultiAccountStore", lambda: fake_accounts)
     monkeypatch.setattr(
         runner,
@@ -152,7 +174,7 @@ def test_telegram_starts_before_mode_prompt(monkeypatch):
         return svc
 
     monkeypatch.setattr(runner, "start_bootstrap_telegram", fake_bootstrap)
-    monkeypatch.setattr(runner, "select_mode", lambda explicit=None: (
+    monkeypatch.setattr(runner, "select_mode", lambda explicit=None, signal=None: (
         events.append("mode_prompt") or RunMode.FARMING
     ))
     monkeypatch.setattr(runner, "MultiAccountStore", lambda: object())
@@ -192,7 +214,7 @@ def test_telegram_attaches_orch_after_connect(monkeypatch):
         control=SimpleNamespace(attach=lambda o: attached.append(o)),
     )
     monkeypatch.setattr(runner, "start_bootstrap_telegram", lambda on_log=None: fake_svc)
-    monkeypatch.setattr(runner, "select_mode", lambda explicit=None: RunMode.FARMING)
+    monkeypatch.setattr(runner, "select_mode", lambda explicit=None, signal=None: RunMode.FARMING)
     monkeypatch.setattr(runner, "MultiAccountStore", lambda: object())
     monkeypatch.setattr(
         runner,
@@ -230,7 +252,7 @@ def test_telegram_not_started_without_config(monkeypatch):
         runner, "start_bootstrap_telegram",
         lambda on_log=None: None,  # tidak dikonfigurasi
     )
-    monkeypatch.setattr(runner, "select_mode", lambda explicit=None: RunMode.FARMING)
+    monkeypatch.setattr(runner, "select_mode", lambda explicit=None, signal=None: RunMode.FARMING)
     monkeypatch.setattr(runner, "MultiAccountStore", lambda: object())
     monkeypatch.setattr(
         runner,

@@ -589,8 +589,29 @@ def test_startup_mode_shows_startup_buttons_not_farming_buttons():
     assert "Dashboard" not in labels
     assert "Combat" not in labels
     assert "Level 100 Public" not in labels
+    assert any("AI Asisten" in l for l in labels)
+    assert any("Farming" in l for l in labels)
     assert any("Cek Status" in l for l in labels)
     assert any("Panduan" in l for l in labels)
+
+
+def test_startup_callback_mode_selection_updates_signal():
+    """Menekan tombol mode di Telegram mengeset pilihan mode di startup_signal."""
+    from skua_lite.mode import StartupSignal, RunMode
+
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    signal = StartupSignal()
+    startup_orch = SimpleNamespace(bot=None, farming=None, startup=True, startup_signal=signal)
+    control = _control(transport, calls, orch=startup_orch)
+
+    control.handle_callback(_callback("special|mode|2"))
+
+    assert signal.selected_mode is RunMode.FARMING
+    assert len(transport.edits) == 1
+    _, _, text, buttons = transport.edits[0]
+    assert "FARMING" in text.upper()
+
 
 
 def test_startup_callback_guide_shows_mode_and_login_steps():
