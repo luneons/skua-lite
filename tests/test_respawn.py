@@ -144,9 +144,15 @@ def test_leveling_loop_auto_respawns_on_death(monkeypatch):
         if any("respawn" in l.lower() or "mati" in l.lower() for l in logs):
             break
         old_sleep(0.05)
+    # Biarkan loop melewati beberapa siklus mati; log tunggu respawn tidak
+    # boleh dispam setiap tick.
+    old_sleep(0.15)
     runtime._leveling_stop.set()
     thread.join(timeout=1)
 
-    assert any("respawn" in l.lower() or "mati" in l.lower() for l in logs), (
-        f"Tidak ada log respawn/mati: {logs}"
-    )
+    death_wait_logs = [
+        line for line in logs
+        if "karakter mati; menunggu respawn dari engine" in line
+    ]
+    assert len(death_wait_logs) == 1, logs
+

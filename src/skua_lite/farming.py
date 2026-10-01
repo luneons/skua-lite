@@ -92,6 +92,7 @@ class FarmingRuntime:
         self._probe_wait_s = 3.0
         self._scw_story_locked = False
         self._leveling_private = False
+        self._death_wait_logged = False
         self._auto_private = False
         self._target_map_enforced: str = ""
         self._target_private_enforced: bool = False
@@ -1037,9 +1038,15 @@ class FarmingRuntime:
                         self.combat.start()
                     except Exception:
                         pass
-                self._on_log("[COMBAT] karakter mati; menunggu respawn dari engine")
+                if not self._death_wait_logged:
+                    self._on_log("[COMBAT] karakter mati; menunggu respawn dari engine")
+                    self._death_wait_logged = True
                 time.sleep(3.0)
                 continue
+
+            # Karakter hidup — reset latch sehingga siklus kematian berikutnya
+            # dicatat sekali lagi.
+            self._death_wait_logged = False
             if spot.cell and combat_state.cell != spot.cell and combat_state.map_file_name:
                 try:
                     self.move_to_cell(spot.cell, spot.pad)
