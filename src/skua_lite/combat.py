@@ -303,6 +303,10 @@ class CombatState:
     max_mp: int = 0
     player_state: int = 0
     seen_self: bool = False
+    # True only after the server has sent at least one uotls/moveToArea
+    # with intHPMax > 0. Before that, hp == 0 means "not yet received",
+    # NOT "dead" — guards that check hp/player_state MUST gate on this.
+    has_hp_snapshot: bool = False
     respawn_move: tuple[str, str] | None = None
     skills: dict[str, SkillState] = field(default_factory=dict)
     monsters: dict[int, MonsterState] = field(default_factory=dict)
@@ -329,12 +333,16 @@ class CombatState:
     _cell_pads: dict[str, str] = field(default_factory=dict)
 
     def note_outbound_move(self, cell: str, pad: str = "") -> None:
-        """Track a sent moveToCell because AQW does not echo our own move."""
+        """Track a sent moveToCell because AQW does not echo our own move.
+
+        Purposely does NOT set seen_self: outbound evidence of a cell move
+        does not prove the server has sent us our own HP/state snapshot yet.
+        seen_self is set only by _update_self (from a server uotls/moveToArea).
+        """
         target = str(cell or "").strip()
         if not target:
             return
         self.cell = target
-        self.seen_self = True
         self._note_pad(pad, target)
 
     def feed(self, packet: str) -> None:
@@ -542,6 +550,10 @@ class CombatState:
         self.mp = _as_int(updates.get("intMP"), self.mp)
         self.max_mp = _as_int(updates.get("intMPMax"), self.max_mp)
         self.player_state = _as_int(updates.get("intState"), self.player_state)
+        # Mark that the server has sent at least one HP snapshot. Before this
+        # point hp/player_state == 0 is "unset", not "dead".
+        if self.max_hp > 0:
+            self.has_hp_snapshot = True
 
     def _note_pad(self, pad: Any, cell: Any = None) -> None:
         """Remember a pad name only when the server actually used it.

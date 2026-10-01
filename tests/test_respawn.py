@@ -15,6 +15,40 @@ def _res_timed_pkt(room: int, cell: str = "Enter", pad: str = "Spawn") -> str:
     return f"%xt%zm%resTimed%-1%{cell}%{pad}%"
 
 
+def test_outbound_move_does_not_turn_uninitialized_zero_hp_into_death():
+    """A sent move proves the cell only; it is not a server HP snapshot."""
+    bot = Mock(room_id=42, session_user_id=999)
+    engine = AutoAttackEngine(
+        bot, target_name="Wrath Guard", class_profile=generic_profile("Mage"),
+        respawn_delay=0.0,
+    )
+
+    engine.feed("%xt%zm%moveToCell%42%r9%Left%", outbound=True)
+    engine.tick()
+
+    assert engine.state.cell == "r9"
+    assert engine.state.seen_self is False
+    assert engine.state.has_hp_snapshot is False
+    assert not any(
+        b"%resPlayerTimed%" in c.args[0]
+        for c in bot._send_raw.call_args_list
+    )
+
+
+def test_server_hp_snapshot_marks_state_ready_for_real_death_detection():
+    state = CombatState(self_username="demo-user", self_user_id=999)
+
+    state.feed(
+        '{"t":"xt","b":{"r":-1,"o":{"cmd":"uotls",'
+        '"unm":"demo-user","o":{"intHP":100,"intHPMax":100,'
+        '"intMP":50,"intMPMax":50,"intState":1}}}}'
+    )
+
+    assert state.seen_self is True
+    assert state.has_hp_snapshot is True
+    assert state.hp == 100 and state.player_state == 1
+
+
 def test_engine_sends_respawn_after_delay_when_dead():
     """Setelah mati & delay respawn, engine kirim resPlayerTimed."""
     bot = Mock(room_id=42, session_user_id=999)
