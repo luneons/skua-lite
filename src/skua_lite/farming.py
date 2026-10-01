@@ -90,6 +90,7 @@ class FarmingRuntime:
         self.leveling_dependency = None
         self._leveling_probe_done = False
         self._probe_wait_s = 3.0
+        self._scw_story_locked = False
         self._leveling_private = False
         self._auto_private = False
         # Full item picture (inventory + bank, every type), separate from the
@@ -198,6 +199,11 @@ class FarmingRuntime:
                     quest_id = int(obj.get("QuestID", 0) or 0)
                     success = int(obj.get("bSuccess", 0) or 0) == 1
                     message = str(obj.get("msg") or "")
+                    from .scw import SCW_GATE_QUEST
+                    if success and quest_id == SCW_GATE_QUEST:
+                        self._scw_story_locked = False
+                        self.leveling_dependency = None
+                        self._on_log("[SCW] gate quest 7977 selesai → story lock dibuka")
                     self._on_log(
                         f"[QUEST] turn-in {quest_id} {'BERHASIL' if success else 'GAGAL'}"
                         + (f": {message}" if message else " (server menolak/tidak memenuhi syarat)")
@@ -209,6 +215,32 @@ class FarmingRuntime:
                         steps = self.reasoning.plan_recovery(reason)
                         self.last_recovery = list(steps)
                         self._on_log(format_diagnosis_log(reason, steps))
+                        # Hook utama: kalau quest FARMING (7979/7980/7981) gagal turn-in
+                        # karena prerequisite/syarat sebelumnya belum selesai (bukan karena
+                        # item kurang / kill belum cukup), itu berarti story Seven Circles
+                        # belum selesai. Reset probe dan arahkan ke story 7968.
+                        from .scw import SCW_XP_SPOT, SCWDependencyPlanner, SEVEN_CIRCLES_CHAIN
+                        farming_quests = {sq for sq in SCW_XP_SPOT.quests}
+                        if quest_id in farming_quests and reason.kind == FailureKind.PREREQUISITE_QUEST:
+                            self._on_log(
+                                f"[SCW] turn-in quest farming {quest_id} ditolak karena prerequisite; "
+                                f"reset farming lock → jalankan story Seven Circles dari awal"
+                            )
+                            self._scw_story_locked = True
+                            # Reset sehingga unlocked() = False dan probe akan dikirim ulang
+                            for fq in farming_quests:
+                                st = self.quest_state.status(fq)
+                                st.accepted = None   # hilangkan "accepted" palsu
+                                st.complete = False
+                            self._leveling_probe_done = False  # izinkan probe ulang
+                            # Set dependency ke step pertama yang belum selesai
+                            dep_step = SCWDependencyPlanner(self.quest_state).next_prerequisite()
+                            if dep_step is not None:
+                                self.leveling_dependency = dep_step
+                                self._on_log(
+                                    f"[SCW] leveling dependency → quest {dep_step.quest_id} "
+                                    f"di {dep_step.map_name} (target: {dep_step.target})"
+                                )
             self._scan_map_cells_if_changed()
 
     def _sync_class_profile(self) -> None:
@@ -742,6 +774,16 @@ class FarmingRuntime:
         except Exception:
             return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
         planner = SCWDependencyPlanner(self.quest_state)
+        # Story-lock mengalahkan unlock: kalau turn-in farming pernah ditolak
+        # karena prerequisite, paksa story sampai 7977 benar-benar ccqr-sukses.
+        if getattr(self, "_scw_story_locked", False):
+            step = planner.next_prerequisite()
+            if step is not None:
+                self.leveling_dependency = step
+                return LevelSpot(step.map_name, step.cell or "Enter",
+                                 step.pad, target=step.target,
+                                 quests=(step.quest_id,))
+            return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
         if planner.unlocked():
             spot = planner.best_xp_spot()
             if spot is not None:
