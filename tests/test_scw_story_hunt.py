@@ -50,3 +50,27 @@ def test_scw_farm_spot_keeps_focused_cell_combat():
     assert spot.cell == "Enter"
     is_hunt = not bool(spot.cell) or (spot.cell == "Enter" and spot.map_name != "sevencircleswar")
     assert is_hunt is False
+
+
+def test_named_hunt_destination_filters_other_monsters():
+    """Hunt Limbo Guard harus pilih r2, bukan r3 yang berisi lebih banyak Luxuria."""
+    bot = Mock(username="demo-user", session_user_id=1, room_id=42)
+    runtime = FarmingRuntime(bot=bot)
+    engine = runtime.combat
+    engine.state.cell = "Enter"
+    engine.state.seen_self = True
+    engine.state.class_name = "Mage"
+
+    # Bentuk monster state dari packet map live: Limbo di r2, Luxuria di r3
+    from skua_lite.combat import MonsterState
+    engine.state.monsters = {
+        1: MonsterState(map_id=1, monster_id=100, name="Limbo Guard", hp=100, max_hp=100, state=1, cell="r2"),
+        2: MonsterState(map_id=2, monster_id=100, name="Limbo Guard", hp=100, max_hp=100, state=1, cell="r2"),
+        3: MonsterState(map_id=3, monster_id=200, name="Luxuria Guard", hp=100, max_hp=100, state=1, cell="r3"),
+        4: MonsterState(map_id=4, monster_id=200, name="Luxuria Guard", hp=100, max_hp=100, state=1, cell="r3"),
+        5: MonsterState(map_id=5, monster_id=200, name="Luxuria Guard", hp=100, max_hp=100, state=1, cell="r3"),
+    }
+    engine.set_target("Limbo Guard")
+    engine.set_map_wide(True)
+    engine.set_auto(False)
+    assert engine._destination_with_enemies()[0] == "r2"

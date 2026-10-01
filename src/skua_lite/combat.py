@@ -895,12 +895,21 @@ class AutoAttackEngine:
         full SWF route graph. The destination comes directly from live
         ``monmap/monBranch`` state, while the pad reuses a server-observed pair
         when available and otherwise uses the client jump-menu default.
+
+        Bila mode bukan auto (target bernama), hanya cell yang berisi monster
+        target yang dipertimbangkan, agar hunt quest tidak nyasar ke monster
+        lain yang lebih banyak di cell berbeda.
         """
         current = self.state.cell.casefold()
+        wanted = ""
+        if not self._auto:
+            wanted = (self.target_name or "").strip().casefold()
         grouped: dict[str, tuple[str, int]] = {}
         for monster in self.state.monsters.values():
             cell = monster.cell.strip()
             if not monster.alive or not cell or cell.casefold() == current:
+                continue
+            if wanted and monster.name.casefold() != wanted:
                 continue
             if cell in self._blocked_cells:
                 continue

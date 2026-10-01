@@ -972,10 +972,11 @@ class FarmingRuntime:
                 self.scw_story.execute_step(dependency)
             elif spot.target and spot.target != "*":
                 # Hunt mode untuk step story tanpa cell spesifik: cari di seluruh map
+                # tapi tetap batasi hanya monster TARGET (set_auto=False), bukan semua monster.
                 is_hunt = not bool(spot.cell) or (spot.cell == "Enter" and spot.map_name != "sevencircleswar")
                 self.combat.set_map_wide(is_hunt)
                 self.combat.set_target(spot.target)
-                self.combat.set_auto(is_hunt)
+                self.combat.set_auto(False)  # target terfokus, bukan sembarang monster
                 if not self.combat.running:
                     self.combat.start()
             else:
