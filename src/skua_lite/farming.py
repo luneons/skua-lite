@@ -157,16 +157,33 @@ class FarmingRuntime:
                 self.item_catalog.feed(packet)
             except Exception:
                 pass
+            cmd = ""
+            obj = {}
+            changed = False
             try:
                 parsed = sfs.parse_xt_json(packet)
                 if parsed is None:
+                    parsed_str = sfs.parse_str_packet(packet)
+                    if parsed_str is not None:
+                        cmd = str(parsed_str.get("cmd") or "")
+                        obj = {"args": parsed_str.get("args") or []}
+                    else:
+                        cmd = ""
+                        obj = {}
                     changed = self.quest_state.feed(packet)
-                    cmd = ""
-                    obj = {}
                 else:
                     cmd = str(parsed.get("cmd") or "")
                     obj = parsed.get("obj") or {}
                     changed = self.quest_state.feed(packet)
+                if cmd == "dropItem" and bool(getattr(self.profile, "pickup_drops", True)):
+                    for drop_id in sfs.parse_drop_item_ids(packet):
+                        wanted = getattr(self.profile, "desired_drop_ids", set()) or set()
+                        if wanted and int(drop_id) not in {int(v) for v in wanted}:
+                            continue
+                        try:
+                            self.pickup_drop(int(drop_id))
+                        except Exception:
+                            pass
             except Exception:
                 changed = False
             if cmd == "moveToArea":

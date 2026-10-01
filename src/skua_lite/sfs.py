@@ -487,6 +487,65 @@ def parse_str_packet(text: str) -> dict | None:
     return {"name": name, "cmd": cmd, "room": room, "args": tail}
 
 
+def parse_drop_item_ids(packet: object) -> list[int]:
+    """Extract satu atau beberapa ItemID dari paket dropItem server.
+
+    Menangani:
+    - envelope JSON dengan ``items`` berbentuk dict keyed by ItemID,
+    - ``items`` berbentuk list,
+    - object langsung berisi ItemID tunggal,
+    - string wire ``%xt%zm%dropItem%<room>%<item_id>%``.
+    """
+    text = packet.decode("latin-1") if isinstance(packet, (bytes, bytearray)) else str(packet)
+    parsed = parse_xt_json(text)
+    if parsed is not None and str(parsed.get("cmd") or "") == "dropItem":
+        obj = parsed.get("obj") or {}
+        found: list[int] = []
+
+        def _collect(raw: object) -> None:
+            if isinstance(raw, dict):
+                if "ItemID" in raw or "itemID" in raw:
+                    try:
+                        value = int(raw.get("ItemID") if raw.get("ItemID") is not None else raw.get("itemID"))
+                    except (TypeError, ValueError):
+                        return
+                    if value > 0:
+                        found.append(value)
+                    return
+                for key, item in raw.items():
+                    if isinstance(item, dict):
+                        _collect(item)
+                    else:
+                        try:
+                            value = int(key if item is None else (item.get("ItemID") if isinstance(item, dict) else key))
+                        except (TypeError, ValueError):
+                            continue
+                        if value > 0:
+                            found.append(value)
+            elif isinstance(raw, list):
+                for item in raw:
+                    _collect(item)
+
+        if isinstance(obj, dict) and "items" in obj:
+            _collect(obj.get("items"))
+        else:
+            _collect(obj)
+        seen: set[int] = set()
+        unique: list[int] = []
+        for item_id in found:
+            if item_id not in seen:
+                seen.add(item_id)
+                unique.append(item_id)
+        return unique
+
+    parsed_str = parse_str_packet(text)
+    if parsed_str is not None and parsed_str.get("cmd") == "dropItem":
+        args = [part for part in (parsed_str.get("args") or []) if str(part).isdigit()]
+        item_ids = [int(part) for part in args if int(part) > 0]
+        return item_ids[-1:] if item_ids else []
+    return []
+
+
 def parse_uotls(text: str) -> dict | None:
     """Parse `%xt%uotls%-1%<username>%k:v,k:v%` player-field updates.
 

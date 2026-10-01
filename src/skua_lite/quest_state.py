@@ -208,26 +208,56 @@ class QuestState:
                 changed = True
             return changed
         if cmd == "addItems":
-            items = obj.get("items") or {}
+            items = obj.get("items")
+            if items is None:
+                items = obj
+            tracked = False
             if isinstance(items, dict):
-                for k, it in items.items():
+                entries = list(items.values()) if ("ItemID" in items or "itemID" in items) else list(items.items())
+                for entry in entries:
+                    if isinstance(entry, tuple):
+                        key, it = entry
+                    else:
+                        key, it = None, entry
                     if isinstance(it, dict):
-                        iid = _int(it.get("ItemID") or k)
+                        iid = _int(it.get("ItemID") or it.get("itemID") or key)
                         qty_now = _int(it.get("iQtyNow") or it.get("iQty"))
                         if iid > 0 and qty_now > 0:
                             self._item_qty[iid] = qty_now
-                            # Progress item bertambah -> izinkan re-evaluasi turn-in
-                            for st in self._quests.values():
-                                st.turn_in_blocked = False
-            return True
-        if cmd == "getDrop":
-            iid = _int(obj.get("ItemID"))
-            qty = _int(obj.get("iQty"), default=1)
-            if iid > 0:
-                self._item_qty[iid] = self._item_qty.get(iid, 0) + qty
+                            tracked = True
+            elif isinstance(items, list):
+                for it in items:
+                    if isinstance(it, dict):
+                        iid = _int(it.get("ItemID") or it.get("itemID"))
+                        qty_now = _int(it.get("iQtyNow") or it.get("iQty"))
+                        if iid > 0 and qty_now > 0:
+                            self._item_qty[iid] = qty_now
+                            tracked = True
+            if tracked:
                 for st in self._quests.values():
                     st.turn_in_blocked = False
             return True
+        if cmd == "getDrop":
+            tracked = False
+            items = obj.get("items")
+            candidates: list[object] = []
+            if isinstance(items, dict):
+                candidates.extend(items.values())
+            elif isinstance(items, list):
+                candidates.extend(items)
+            else:
+                candidates.append(obj)
+            for it in candidates:
+                if isinstance(it, dict):
+                    iid = _int(it.get("ItemID") or it.get("itemID"))
+                    qty = _int(it.get("iQty"), default=1)
+                    if iid > 0:
+                        self._item_qty[iid] = self._item_qty.get(iid, 0) + qty
+                        tracked = True
+            if tracked:
+                for st in self._quests.values():
+                    st.turn_in_blocked = False
+            return tracked
         if cmd == "ccqr":
             qid = _int(obj.get("QuestID"))
             if qid <= 0:

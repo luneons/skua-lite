@@ -91,3 +91,41 @@ def test_missing_quest_progress_blocks_further_turn_in_until_progress_changes():
     ))
     assert state.can_turn_in(7979) is True
     assert state.turn_in_ready(7979, cooldown_s=15.0, now=1000.0) is True
+
+
+def test_add_items_list_shape_unlocks_turn_in():
+    state = QuestState()
+    state.feed(_packet("acceptQuest", QuestID=7979, bSuccess=1, msg="success"))
+    state.feed(_packet(
+        "getQuests",
+        quests={
+            "7979": {
+                "QuestID": 7979,
+                "turnin": [{"ItemID": 9001, "sName": "Wrath Guard Defeated", "iQty": 12}],
+            }
+        },
+    ))
+    state.feed(_packet(
+        "addItems",
+        items=[{"ItemID": 9001, "sName": "Wrath Guard Defeated", "iQtyNow": 12}],
+    ))
+    assert state.can_turn_in(7979) is True
+
+
+def test_get_drop_nested_items_shape_unlocks_turn_in():
+    state = QuestState()
+    state.feed(_packet("acceptQuest", QuestID=7980, bSuccess=1, msg="success"))
+    state.feed(_packet(
+        "getQuests",
+        quests={
+            "7980": {
+                "QuestID": 7980,
+                "turnin": [{"ItemID": 9002, "sName": "War Medal", "iQty": 5}],
+            }
+        },
+    ))
+    state.feed(_packet(
+        "getDrop",
+        items={"9002": {"ItemID": 9002, "sName": "War Medal", "iQty": 5}},
+    ))
+    assert state.can_turn_in(7980) is True

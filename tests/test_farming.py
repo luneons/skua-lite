@@ -667,6 +667,38 @@ def test_farming_runtime_stop_stops_the_auto_goal():
     assert runtime.auto_planner.active is False
 
 
+def test_combat_set_map_wide_does_not_spam_goal_log_if_unchanged():
+    """set_map_wide(True) berulang kali tidak boleh spam log [GOAL] setiap tick."""
+    from skua_lite.combat import AutoAttackEngine, generic_profile
+
+    logs: list[str] = []
+    bot = Mock(room_id=42, session_user_id=1)
+    engine = AutoAttackEngine(
+        bot, target_name="Limbo Guard", class_profile=generic_profile("Mage"), on_log=logs.append
+    )
+
+    for _ in range(10):
+        engine.set_map_wide(True)
+
+    goal_logs = [l for l in logs if "lawan semua musuh" in l]
+    assert len(goal_logs) == 1
+
+
+def test_auto_pickup_drop_sends_get_drop_packet_when_enabled():
+    """Saat server kirim dropItem, farming runtime otomatis kirim getDrop."""
+    from skua_lite import farming
+
+    sent: list[str] = []
+    bot = Mock(room_id=273)
+    bot._send_raw = lambda pkt: sent.append(pkt.rstrip(b"\x00").decode("latin-1"))
+    runtime = farming.FarmingRuntime(bot=bot, profile=farming.FarmProfile(pickup_drops=True))
+
+    drop_pkt = '{"t":"xt","b":{"r":-1,"o":{"cmd":"dropItem","items":{"58925":{"ItemID":58925,"sName":"Indulgence","iQty":1}}}}}'
+    runtime.feed_packet(drop_pkt)
+
+    assert "%xt%zm%getDrop%273%58925%" in sent
+
+
 def test_farming_runtime_rest_pickup_and_quest_use_verified_packets():
     sent: list[str] = []
     bot = Mock()

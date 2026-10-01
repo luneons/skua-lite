@@ -736,13 +736,15 @@ class AutoAttackEngine:
     def set_map_wide(self, enabled: bool) -> None:
         """Enable/disable the goal "lawan semua musuh yang ada di map ini"."""
         with self._lock:
+            changed = self._map_wide != bool(enabled)
             self._map_wide = bool(enabled)
             self._auto = bool(enabled)
-            self._move_target = None
-            self._move_attempts = 0
-            self._blocked_cells.clear()
-            self._move_status = ""
-        if enabled:
+            if changed:
+                self._move_target = None
+                self._move_attempts = 0
+                self._blocked_cells.clear()
+                self._move_status = ""
+        if enabled and changed:
             self.on_log(
                 "[GOAL] lawan semua musuh di map: scan -> lawan -> pindah -> ulang"
             )
