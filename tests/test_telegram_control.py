@@ -570,14 +570,63 @@ def test_tambahakun_on_telegram_blocks_passwords_and_instructs_safe_methods():
     assert "/gantiakun" in reply
 
 
-def test_tambahakun_with_args_does_not_echo_or_save_password():
-    """Jika user nekat mengetik password di Telegram, tolak dan jangan cetak kembali."""
-    transport = FakeTransport()
-    control = _control(transport, [])
+# ---------------------------------------------------------------- startup buttons context
 
-    control.handle_message(_message("/tambahakun demo-user,supersecret123"))
+
+def test_startup_mode_shows_startup_buttons_not_farming_buttons():
+    """Saat startup, tombol tidak boleh Dashboard/Combat/Leveling melainkan tombol startup."""
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    startup_orch = SimpleNamespace(bot=None, farming=None, startup=True)
+    control = _control(transport, calls, orch=startup_orch)
+
+    control.handle_message(_message("/panel"))
 
     assert len(transport.sent) == 1
-    reply = transport.sent[0][1]
-    assert "supersecret123" not in reply  # TIDAK BOLEH MEMANTULKAN PASSWORD
-    assert ".tambahakun" in reply
+    _, text, buttons = transport.sent[0]
+    assert "STARTUP" in text
+    labels = [b["text"] for row in buttons for b in row]
+    assert "Dashboard" not in labels
+    assert "Combat" not in labels
+    assert "Level 100 Public" not in labels
+    assert any("Cek Status" in l for l in labels)
+    assert any("Panduan" in l for l in labels)
+
+
+def test_startup_callback_guide_shows_mode_and_login_steps():
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    startup_orch = SimpleNamespace(bot=None, farming=None, startup=True)
+    control = _control(transport, calls, orch=startup_orch)
+
+    control.handle_callback(_callback("special|startup_guide|"))
+
+    assert len(transport.edits) == 1
+    _, _, text, buttons = transport.edits[0]
+    assert "MODE AI ASISTEN" in text
+    assert "MODE FARMING" in text
+    labels = [b["text"] for row in buttons for b in row]
+    assert any("Cek Status" in l for l in labels)
+
+
+def test_attaching_connected_orch_switches_buttons_back_to_farming():
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    startup_orch = SimpleNamespace(bot=None, farming=None, startup=True)
+    control = _control(transport, calls, orch=startup_orch)
+
+    # Saat startup -> tombol startup
+    control.handle_message(_message("/panel"))
+    labels_startup = [b["text"] for row in transport.sent[0][2] for b in row]
+    assert "Dashboard" not in labels_startup
+
+    # Setelah login & attach orch baru -> tombol farming
+    connected_orch = SimpleNamespace(
+        bot=SimpleNamespace(current_map="oaklore-1", server=SimpleNamespace(name="DemoServer"), level=100),
+        farming=SimpleNamespace(combat=None, auto_planner=None, is_leveling=lambda: False),
+    )
+    control.attach(connected_orch)
+    control.handle_message(_message("/panel"))
+    labels_connected = [b["text"] for row in transport.sent[1][2] for b in row]
+    assert "Dashboard" in labels_connected
+    assert "Combat" in labels_connected

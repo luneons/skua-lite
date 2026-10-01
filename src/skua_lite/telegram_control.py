@@ -318,6 +318,16 @@ def panel_buttons() -> list[list[dict[str, str]]]:
     ]
 
 
+def startup_buttons() -> list[list[dict[str, str]]]:
+    """Tombol kontekstual saat bot baru start dan menunggu pilihan mode/login di terminal."""
+    return [
+        [
+            {"text": "🔄 Cek Status", "callback_data": "special|panel|"},
+            {"text": "📖 Panduan Startup", "callback_data": "special|startup_guide|"},
+        ],
+    ]
+
+
 def help_text() -> str:
     return (
         "SKUA-LITE TELEGRAM CONTROL\n"
@@ -374,6 +384,24 @@ class TelegramControl:
     def attach(self, orch: Any) -> None:
         """Ganti orchestrator yang dikontrol saat mode/login telah selesai."""
         self.orch = orch
+
+    def _current_buttons(self) -> list[list[dict[str, str]]]:
+        if bool(getattr(self.orch, "startup", False)):
+            return startup_buttons()
+        return panel_buttons()
+
+    def _handle_startup_guide(self) -> str:
+        return (
+            "=== PANDUAN STARTUP SKUA-LITE ===\n\n"
+            "Bot memiliki 2 mode utama:\n"
+            "• [1] MODE AI ASISTEN: login, AFK di Yulgar, AI & perintah chat aktif.\n"
+            "• [2] MODE FARMING: combat mandiri, auto leveling, Telegram full control.\n\n"
+            "Cara menjalankan:\n"
+            "1. Buka jendela terminal tempat skua-lite dijalankan.\n"
+            "2. Ketik angka 1 atau 2 lalu tekan Enter.\n"
+            "3. Jika memilih mode farming, pilih akun tersimpan atau tambahkan akun baru.\n"
+            "4. Setelah bot masuk ke map di game, tekan 'Cek Status' di sini untuk membuka tombol kontrol lengkap!"
+        )
 
     def _authorize(self, user_id: int, chat_id: int, *, callback_id: str = "") -> bool:
         if self.owner_id is None:
@@ -647,13 +675,13 @@ class TelegramControl:
             return
         action, arg = parse_telegram_command(str(message.get("text") or ""))
         if action == "__help__":
-            self.transport.send_message(chat_id, help_text(), buttons=panel_buttons())
+            self.transport.send_message(chat_id, help_text(), buttons=self._current_buttons())
         elif action == "__panel__":
             self.transport.send_message(
-                chat_id, self._panel_text(), buttons=panel_buttons()
+                chat_id, self._panel_text(), buttons=self._current_buttons()
             )
         elif action == "__stop__":
-            self.transport.send_message(chat_id, self._execute_stop(), buttons=panel_buttons())
+            self.transport.send_message(chat_id, self._execute_stop(), buttons=self._current_buttons())
         elif action == "__screenshot__":
             self._handle_screenshot(chat_id)
         elif action == "__add_account__":
@@ -670,12 +698,12 @@ class TelegramControl:
             self.transport.send_message(chat_id, text, buttons=buttons)
         elif action:
             self.transport.send_message(
-                chat_id, self._execute(action, arg), buttons=panel_buttons()
+                chat_id, self._execute(action, arg), buttons=self._current_buttons()
             )
         else:
             self.transport.send_message(
                 chat_id, "Perintah tidak dikenal. Gunakan /help atau /panel.",
-                buttons=panel_buttons(),
+                buttons=self._current_buttons(),
             )
 
     def _handle_add_account(self, chat_id: int) -> None:
@@ -698,8 +726,12 @@ class TelegramControl:
         if bool(getattr(self.orch, "startup", False)):
             return (
                 "=== SKUA-LITE STARTUP ===\n"
-                "Status: Menunggu pemilihan mode / login di terminal.\n"
-                "Pilih [1] MODE AI ASISTEN atau [2] MODE FARMING."
+                "Status: Menunggu pemilihan mode di terminal.\n\n"
+                "Langkah:\n"
+                "1. Di terminal: pilih [1] MODE AI ASISTEN atau [2] MODE FARMING\n"
+                "2. Masukkan akun / pilih akun tersimpan\n"
+                "3. Panel kontrol (Dashboard, Combat, dll) otomatis aktif setelah login.\n\n"
+                "Tekan tombol 'Cek Status' setelah login selesai."
             )
         from .cli import farm_dashboard_lines
 
@@ -738,10 +770,13 @@ class TelegramControl:
         kind, action, arg = pieces
         if kind == "special" and action == "stop":
             text = self._execute_stop()
-            new_buttons = panel_buttons()
+            new_buttons = self._current_buttons()
         elif kind == "special" and action == "panel":
             text = self._panel_text()
-            new_buttons = panel_buttons()
+            new_buttons = self._current_buttons()
+        elif kind == "special" and action == "startup_guide":
+            text = self._handle_startup_guide()
+            new_buttons = self._current_buttons()
         elif kind == "special" and action == "settings":
             text = self._settings_text()
             new_buttons = self._settings_buttons()
@@ -759,10 +794,10 @@ class TelegramControl:
                 text = _bounded(orch.switch_account_by_name(arg))
             else:
                 text = f"Gagal ganti akun: method switch_account_by_name tidak tersedia."
-            new_buttons = panel_buttons()
+            new_buttons = self._current_buttons()
         elif kind == "cmd" and action in set(_ALIASES.values()):
             text = self._execute(action, arg)
-            new_buttons = panel_buttons()
+            new_buttons = self._current_buttons()
         else:
             self.transport.answer_callback_query(callback_id, "Tombol tidak dikenal")
             return
