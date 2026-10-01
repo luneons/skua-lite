@@ -93,6 +93,9 @@ class FarmingRuntime:
         self._scw_story_locked = False
         self._leveling_private = False
         self._auto_private = False
+        self._target_map_enforced: str = ""
+        self._target_private_enforced: bool = False
+        self._last_rejoin_time: float = 0.0
         # Full item picture (inventory + bank, every type), separate from the
         # class-only view combat keeps for its profile.
         self.item_catalog = ItemCatalog()
@@ -165,6 +168,21 @@ class FarmingRuntime:
                     changed = self.quest_state.feed(packet)
             except Exception:
                 changed = False
+            if cmd == "moveToArea":
+                # Catat nama map baru dari payload sebelum memicu pengecekan
+                area_name = str(obj.get("areaName") or "").strip()
+                if area_name and hasattr(self.bot, "current_map"):
+                    try:
+                        self.bot.current_map = area_name
+                    except Exception:
+                        pass
+                # Cek room guard di thread terpisah agar tidak memblokir socket reader
+                import threading as _thr
+                _thr.Thread(
+                    target=self._deferred_room_enforcement,
+                    daemon=True,
+                    name="room-guard",
+                ).start()
             if changed:
                 if cmd == "acceptQuest":
                     quest_id = int(obj.get("QuestID", 0) or 0)
@@ -489,8 +507,49 @@ class FarmingRuntime:
         current_private = current.casefold().endswith("-100000")
         return base.casefold() == wanted.casefold() and current_private == bool(private)
 
+    def set_target_room(self, map_name: str, *, private: bool = False) -> None:
+        """Catat target room untuk deteksi wrong room dan auto-rejoin."""
+        self._target_map_enforced = str(map_name or "").strip()
+        self._target_private_enforced = bool(private)
+
+    def _deferred_room_enforcement(self) -> None:
+        """Jalankan check_room_enforcement setelah jeda singkat agar moveToArea selesai diproses."""
+        import time as _t
+        _t.sleep(0.3)
+        try:
+            self.check_room_enforcement()
+        except Exception as exc:
+            self._on_log(f"[ROOM-GUARD] deferred check error: {exc}")
+
+    def check_room_enforcement(self, *, cooldown_s: float = 3.0) -> bool:
+        """Deteksi apakah bot berada di wrong room; jika ya, auto-rejoin."""
+        if not self._target_map_enforced:
+            return False
+        current = str(getattr(self.bot, "current_map", "") or "")
+        if not current:
+            return False
+        if self._room_matches(current, self._target_map_enforced, private=self._target_private_enforced):
+            return False
+        # Debounce agar tidak spam join saat server menolak atau loading
+        import time as _t
+        now = _t.monotonic()
+        if now - self._last_rejoin_time < cooldown_s:
+            return False
+        self._last_rejoin_time = now
+        self._on_log(
+            f"[ROOM-GUARD] Terdeteksi wrong room ({current}); "
+            f"auto-rejoin ke {self._target_map_enforced} (private={self._target_private_enforced})"
+        )
+        try:
+            self.join(self._target_map_enforced, private=self._target_private_enforced)
+            return True
+        except Exception as exc:
+            self._on_log(f"[ROOM-GUARD] Auto-rejoin gagal: {exc}")
+            return False
+
     def join(self, map_name: str, *, private: bool = False) -> None:
         target = self._room_target(map_name, private=private)
+        self.set_target_room(map_name, private=private)
         self.bot.join_map(target)
         self.profile.map_name = target
 
@@ -926,11 +985,17 @@ class FarmingRuntime:
 
             # Navigate. A transient join failure must not kill the loop; the
             # bracket is re-evaluated next tick.
-            raw_map = (self.bot.current_map or "").split("-")[0].lower()
             target_map = spot.map_name.lower()
-            if raw_map != target_map:
+            current_map = str(getattr(self.bot, "current_map", "") or "")
+            # Non-private mode: cukup cocokkan base map (tidak paksa pindah dari private jika sudah di sini)
+            # Private mode: wajib private scope
+            current_base = current_map.split("-")[0].lower() if current_map else ""
+            if self._leveling_private:
+                need_join = not self._room_matches(current_map, target_map, private=True)
+            else:
+                need_join = (current_base != target_map)
+            if need_join:
                 try:
-                    # Public by default; `-private` is an explicit CLI choice.
                     self.join(target_map, private=self._leveling_private)
                 except (FarmingUnsupported, BotError) as exc:
                     # --- reasoning: diagnosa kegagalan join + syarat sebelumnya ---

@@ -287,6 +287,8 @@ def parse_telegram_command(text: str) -> tuple[str, Any]:
         return "__settings__", ""
     if verb in {"ss", "screenshot", "kondisi"}:
         return "__screenshot__", ""
+    if verb in {"tambahakun", "addakun", "addaccount"}:
+        return "__add_account__", arg
     if verb == "gantiserver":
         return "__change_server__", arg
     if verb == "gantiakun":
@@ -647,6 +649,8 @@ class TelegramControl:
             self.transport.send_message(chat_id, self._execute_stop(), buttons=panel_buttons())
         elif action == "__screenshot__":
             self._handle_screenshot(chat_id)
+        elif action == "__add_account__":
+            self._handle_add_account(chat_id)
         elif action == "__settings__":
             self.transport.send_message(
                 chat_id, self._settings_text(), buttons=self._settings_buttons()
@@ -666,6 +670,17 @@ class TelegramControl:
                 chat_id, "Perintah tidak dikenal. Gunakan /help atau /panel.",
                 buttons=panel_buttons(),
             )
+
+    def _handle_add_account(self, chat_id: int) -> None:
+        """Panduan menambah akun secara aman — password tidak pernah melewati Telegram."""
+        guide = (
+            "🔒 Demi keamanan, password TIDAK boleh dikirim lewat chat Telegram.\n\n"
+            "Gunakan cara aman berikut:\n"
+            "1. Terminal bot: ketik .tambahakun <username>,<password>\n"
+            "2. File akun.txt: isi baris 'username,password' lalu simpan\n\n"
+            "Setelah akun tersimpan, gunakan /gantiakun di sini untuk beralih ke akun yang diinginkan."
+        )
+        self.transport.send_message(chat_id, guide, buttons=panel_buttons())
 
     def _panel_text(self) -> str:
         if self._is_multi():

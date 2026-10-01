@@ -519,3 +519,65 @@ def test_screenshot_with_bot_username_falls_back_cleanly_on_offline_render():
     assert "TestHero" in text
     assert "Void Highlord" in text
     assert "battleon" in text
+
+# ---------------------------------------------------------------- multi-account join broadcast
+
+
+def test_telegram_join_broadcasts_to_all_multi_accounts():
+    from skua_lite.multi_session import MultiOrchestrator
+
+    transport = FakeTransport()
+    calls1 = []
+    calls2 = []
+
+    def make_slot(calls):
+        b = Mock()
+        b.join_map = Mock(side_effect=lambda m: calls.append(f"joined {m}"))
+        f = Mock()
+        f.join = Mock(side_effect=lambda m, private=False: calls.append(f"farm_join {m} private={private}"))
+        return SimpleNamespace(bot=b, farming=f, server_name="Yorumi")
+
+    mo = MultiOrchestrator()
+    mo.add_slot("Acc1", make_slot(calls1))
+    mo.add_slot("Acc2", make_slot(calls2))
+
+    control = _control(transport, [], orch=mo)
+    control.handle_message(_message("/join sevencircleswar -private"))
+
+    assert len(transport.sent) == 1
+    reply = transport.sent[0][1]
+    assert "=== HASIL 2 AKUN ===" in reply
+    assert "[Acc1]" in reply
+    assert "[Acc2]" in reply
+    assert calls1 == ["farm_join sevencircleswar private=True"]
+    assert calls2 == ["farm_join sevencircleswar private=True"]
+
+# ---------------------------------------------------------------- /tambahakun safe flow on Telegram
+
+
+def test_tambahakun_on_telegram_blocks_passwords_and_instructs_safe_methods():
+    """Telegram tidak boleh menerima atau menyimpan password; harus memandu cara aman."""
+    transport = FakeTransport()
+    control = _control(transport, [])
+
+    control.handle_message(_message("/tambahakun"))
+
+    assert len(transport.sent) == 1
+    reply = transport.sent[0][1]
+    assert "keamanan" in reply.lower() or "aman" in reply.lower()
+    assert ".tambahakun" in reply
+    assert "akun.txt" in reply
+    assert "/gantiakun" in reply
+
+
+def test_tambahakun_with_args_does_not_echo_or_save_password():
+    """Jika user nekat mengetik password di Telegram, tolak dan jangan cetak kembali."""
+    transport = FakeTransport()
+    control = _control(transport, [])
+
+    control.handle_message(_message("/tambahakun demo-user,supersecret123"))
+
+    assert len(transport.sent) == 1
+    reply = transport.sent[0][1]
+    assert "supersecret123" not in reply  # TIDAK BOLEH MEMANTULKAN PASSWORD
+    assert ".tambahakun" in reply

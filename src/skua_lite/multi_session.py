@@ -142,23 +142,71 @@ class MultiOrchestrator:
             lines.append(f"[{username}] {clean}")
         return "\n".join(lines)
 
+    def _slot_card(self, username: str, orch: Any) -> str:
+        """Buat kartu status satu slot: level, kelas, HP, map, task."""
+        bot = getattr(orch, "bot", None)
+        if bot is None:
+            return "OFFLINE"
+        state_val = getattr(bot, "state", "?")
+        state_val = str(getattr(state_val, "value", state_val))
+        current_map = str(getattr(bot, "current_map", "?") or "?")
+        level = getattr(bot, "level", "?")
+        runtime = getattr(orch, "farming", None)
+        combat_obj = getattr(runtime, "combat", None) if runtime is not None else None
+
+        # Resolusi kelas dari beberapa kemungkinan sumber (combat state, profile, catalog)
+        class_name = ""
+        if combat_obj is not None:
+            cs = getattr(combat_obj, "state", None)
+            if cs is not None and getattr(cs, "class_name", ""):
+                class_name = str(cs.class_name)
+            elif getattr(combat_obj, "class_name", ""):
+                class_name = str(combat_obj.class_name)
+            elif getattr(combat_obj, "class_profile", None) is not None:
+                class_name = str(getattr(combat_obj.class_profile, "name", "") or "")
+        if not class_name:
+            class_name = "-"
+
+        # Resolusi HP/Max HP dari combat state atau area_state snapshot
+        hp = None
+        max_hp = None
+        if combat_obj is not None:
+            cs = getattr(combat_obj, "state", None)
+            hp = getattr(cs, "hp", None)
+            max_hp = getattr(cs, "max_hp", None)
+        if (hp is None or max_hp is None) and runtime is not None:
+            area = getattr(runtime, "area_state", None)
+            snap = getattr(area, "self_state", None) if area is not None else None
+            if snap is not None:
+                if hp is None:
+                    hp = getattr(snap, "hp", None)
+                if max_hp is None:
+                    max_hp = getattr(snap, "max_hp", None)
+
+        hp_str = f"{hp}/{max_hp}" if hp is not None and max_hp is not None else "?/??"
+        task = runtime.status() if runtime is not None else "runtime tidak siap"
+        return (
+            f"Lv.{level} {class_name} | HP: {hp_str}\n"
+            f"    Map: {current_map} | {task}"
+        )
+
     def status_all(self) -> dict[str, str]:
         results: dict[str, str] = {}
         for username, orch in self.slots():
-            bot = getattr(orch, "bot", None)
-            runtime = getattr(orch, "farming", None)
-            if bot is None:
-                results[username] = "OFFLINE"
-                continue
-            state = getattr(bot, "state", "?")
-            state = getattr(state, "value", state)
-            current_map = getattr(bot, "current_map", "?")
-            detail = runtime.status() if runtime is not None else "runtime tidak siap"
-            results[username] = f"{state} | {current_map} | {detail}"
+            results[username] = self._slot_card(username, orch)
         return results
 
     def dashboard_text(self) -> str:
-        return self.format_broadcast(self.status_all()).replace("HASIL", "MULTI-BOT")
+        results = self.status_all()
+        if not results:
+            return "Tidak ada akun aktif."
+        n = len(results)
+        lines = [f"=== MULTI-BOT {n} AKUN ==="]
+        for username, card in results.items():
+            lines.append(f"[{username}]")
+            for sub in card.splitlines():
+                lines.append(f"  {sub}")
+        return "\n".join(lines)
 
     # -------------------------------------------------------------- settings
 

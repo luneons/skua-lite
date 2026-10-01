@@ -1234,3 +1234,78 @@ def test_farming_orchestrator_connect_skips_ai_and_afk(monkeypatch):
     assert built.get("ai_router") is None
     assert orch.farming is not None
     assert orch.farming.running is True
+
+# ---------------------------------------------------------------- auto-rejoin on wrong room / room mismatch
+
+
+def test_room_matches_detects_scope_mismatch_correctly():
+    """_room_matches harus mendeteksi bahwa publik != private meski base map sama."""
+    from skua_lite.farming import FarmingRuntime, FarmProfile
+    from unittest.mock import Mock
+
+    bot = Mock()
+    bot.username = "demo-user"
+    runtime = FarmingRuntime(bot, FarmProfile())
+
+    # Bot di room publik, target private -> TIDAK match
+    assert not runtime._room_matches("sevencircleswar-1", "sevencircleswar", private=True)
+
+    # Bot di room private, target private -> match
+    assert runtime._room_matches("sevencircleswar-100000", "sevencircleswar", private=True)
+
+    # Bot di room publik, target publik -> match
+    assert runtime._room_matches("sevencircleswar-5", "sevencircleswar", private=False)
+
+    # Bot di map yang berbeda sama sekali -> tidak match
+    assert not runtime._room_matches("battleon-1", "sevencircleswar", private=False)
+
+
+def test_runtime_auto_rejoins_target_room_on_unexpected_area_move():
+    """Jika server melempar bot ke map/room lain, runtime auto-rejoin ke target."""
+    from skua_lite.farming import FarmingRuntime, FarmProfile
+    from skua_lite.bot import BotState
+    from unittest.mock import Mock
+
+    bot = Mock()
+    bot.state = BotState.IN_MAP
+    bot.current_map = "battleon-1"
+    bot.room_id = 99
+    rejoins = []
+    bot.join_map = Mock(side_effect=lambda m: rejoins.append(m))
+
+    runtime = FarmingRuntime(bot, FarmProfile(map_name="yulgar-100000"))
+    runtime.set_target_room("yulgar", private=True)
+
+    # Server mengirim paket moveToArea yang memindahkan bot ke battleon-1
+    # runtime mendeteksi ini wrong room dan memanggil rejoin
+    runtime.check_room_enforcement()
+
+    assert rejoins == ["yulgar-100000"]
+
+def test_feed_packet_moveToArea_triggers_room_guard_rejoin(monkeypatch):
+    """Saat server mengirim moveToArea ke wrong room, feed_packet memicu auto-rejoin."""
+    import time
+    from skua_lite.farming import FarmingRuntime, FarmProfile
+    from skua_lite.bot import BotState
+    from unittest.mock import Mock
+
+    bot = Mock()
+    bot.state = BotState.IN_MAP
+    bot.current_map = "battleon-1"  # room salah!
+    bot.room_id = 12
+    join_calls = []
+    bot.join_map = Mock(side_effect=lambda m: join_calls.append(m))
+
+    runtime = FarmingRuntime(bot, FarmProfile())
+    runtime.set_target_room("sevencircleswar", private=True)
+
+    # Server mengirim paket moveToArea
+    packet = '{"t":"xt","b":{"r":-1,"o":{"cmd":"moveToArea","areaId":12,"areaName":"battleon-1","strMapName":"battleon"}}}'
+    runtime.feed_packet(packet)
+
+    # Tunggu background deferred thread
+    deadline = time.monotonic() + 2.0
+    while not join_calls and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    assert join_calls == ["sevencircleswar-100000"]

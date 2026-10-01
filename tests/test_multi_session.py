@@ -212,3 +212,58 @@ def test_telegram_broadcast_level_to_all_slots():
     assert any(a == "level" and arg == "100" for a, arg in broadcast_calls)
     # Balas harus dikirim ke owner
     assert len(transport.sent) == 1
+
+# ---------------------------------------------------------------- detailed status_all
+
+
+def test_multi_status_all_reports_level_class_hp_and_task():
+    from skua_lite.multi_session import MultiOrchestrator
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    bot1 = Mock()
+    bot1.username = "Hero1"
+    bot1.level = 100
+    bot1.current_map = "sevencircleswar-100000"
+    bot1.state = "IN_MAP"
+    combat1 = Mock()
+    combat1.class_name = "Void Highlord"
+    combat1.state = SimpleNamespace(cell="Enter", hp=2805, max_hp=2805)
+    farming1 = Mock()
+    farming1.combat = combat1
+    farming1.status.return_value = "LEVELING (7981)"
+
+    orch1 = SimpleNamespace(bot=bot1, farming=farming1, server_name="Yorumi")
+
+    mo = MultiOrchestrator()
+    mo.add_slot("Hero1", orch1)
+
+    status = mo.status_all()
+    assert "Hero1" in status
+    text = status["Hero1"]
+    assert "100" in text               # level
+    assert "Void Highlord" in text     # class
+    assert "2805/2805" in text         # hp/max_hp
+    assert "sevencircleswar-100000" in text  # map
+    assert "LEVELING" in text          # task
+
+
+def test_multi_dashboard_text_formats_rich_cards():
+    from skua_lite.multi_session import MultiOrchestrator
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    bot = Mock(username="Sorani", level=85, current_map="lair-100000", state="IN_MAP")
+    combat = Mock(class_name="Legion Revenant", state=SimpleNamespace(cell="Hole", hp=1900, max_hp=2000))
+    farming = Mock(combat=combat, status=lambda: "COMBAT ON -> Red Dragon")
+    orch = SimpleNamespace(bot=bot, farming=farming, server_name="Yorumi")
+
+    mo = MultiOrchestrator()
+    mo.add_slot("Sorani", orch)
+
+    card = mo.dashboard_text()
+    assert "Sorani" in card
+    assert "Lv.85" in card or "Level 85" in card or "85" in card
+    assert "Legion Revenant" in card
+    assert "1900/2000" in card
+    assert "lair-100000" in card

@@ -312,6 +312,7 @@ class MultiAccountStore:
     PLAINTEXT_FILE = "akun.txt"
 
     def __init__(self, base_dir: Path | None = None) -> None:
+        self._explicit_base_dir = base_dir is not None
         self._store = CredentialStore(base_dir=base_dir)
         self.base_dir = self._store.base_dir
         self.accounts_file = self.base_dir / self.ACCOUNTS_FILE
@@ -339,9 +340,11 @@ class MultiAccountStore:
                 pass
 
         # 2. Cek file di current working directory (misal C:/.../skua-lite/akun.txt)
+        # Hanya jika store menggunakan lokasi default (tidak dispesifikasikan base_dir secara eksplisit)
+        # agar test atau per-slot store yang terisolasi tidak tertular file lokal root.
         try:
             cwd_file = Path.cwd() / self.PLAINTEXT_FILE
-            if cwd_file != self.plaintext_file and cwd_file.exists() and not cwd_file.is_dir():
+            if not self._explicit_base_dir and cwd_file != self.plaintext_file and cwd_file.exists() and not cwd_file.is_dir():
                 text = cwd_file.read_text(encoding="utf-8")
                 harden_plaintext_file(cwd_file)
                 # Kunci yang sudah ada di results tidak ditimpa
