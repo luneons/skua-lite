@@ -52,11 +52,37 @@ def test_select_mode_accepts_telegram_signal_without_terminal_input(monkeypatch)
         signal.set_mode(RunMode.FARMING)
 
     threading.Thread(target=choose_from_telegram, daemon=True).start()
-    # Reader thread boleh menunggu input sungguhan; pilihan Telegram harus menang
-    # dengan bounded deadline dan mengembalikan mode.
     mode = select_mode(output=printed.append, signal=signal)
 
     assert mode is RunMode.FARMING
+    assert any("telegram" in line.casefold() for line in printed)
+
+
+def test_prompt_farming_account_flow_accepts_telegram_signal():
+    """Tombol akun di Telegram harus bisa memilih akun tanpa menunggu input terminal."""
+    import threading
+    import time
+    from skua_lite.mode import StartupSignal
+    from skua_lite.runner import prompt_farming_account_flow
+
+    class FakeStore:
+        def list_usernames(self):
+            return ["demo-user1", "demo-user2"]
+
+    signal = StartupSignal()
+    printed: list[str] = []
+
+    def press_telegram():
+        time.sleep(0.05)
+        signal.set_account_flow(("single", ["demo-user1"]))
+
+    threading.Thread(target=press_telegram, daemon=True).start()
+
+    result = prompt_farming_account_flow(
+        FakeStore(), output=printed.append, signal=signal
+    )
+
+    assert result == ("single", ["demo-user1"])
     assert any("telegram" in line.casefold() for line in printed)
 
 
@@ -111,7 +137,7 @@ def test_run_prompts_for_account_flow_before_credentials(monkeypatch):
     monkeypatch.setattr(
         runner,
         "prompt_farming_account_flow",
-        lambda store: calls.append("account_flow") or ("single", None),
+        lambda store, **kw: calls.append("account_flow") or ("single", None),
     )
 
     class FakeOrchestrator:
@@ -142,7 +168,7 @@ def test_run_routes_selected_accounts_to_multi(monkeypatch):
     monkeypatch.setattr(
         runner,
         "prompt_farming_account_flow",
-        lambda store: ("multi", selected),
+        lambda store, **kw: ("multi", selected),
     )
 
     def fake_run_multi(**kwargs):
@@ -181,7 +207,7 @@ def test_telegram_starts_before_mode_prompt(monkeypatch):
     monkeypatch.setattr(
         runner,
         "prompt_farming_account_flow",
-        lambda store: ("single", None),
+        lambda store, **kw: ("single", None),
     )
 
     class AbortOrch:
@@ -219,7 +245,7 @@ def test_telegram_attaches_orch_after_connect(monkeypatch):
     monkeypatch.setattr(
         runner,
         "prompt_farming_account_flow",
-        lambda store: ("single", None),
+        lambda store, **kw: ("single", None),
     )
 
     real_orch = Mock()
@@ -257,7 +283,7 @@ def test_telegram_not_started_without_config(monkeypatch):
     monkeypatch.setattr(
         runner,
         "prompt_farming_account_flow",
-        lambda store: ("single", None),
+        lambda store, **kw: ("single", None),
     )
 
     class AbortOrch:

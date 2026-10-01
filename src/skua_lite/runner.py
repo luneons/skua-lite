@@ -507,14 +507,63 @@ def _admin_status(bot: bot_mod.AQWBot | None) -> str:
 
 
 
-def prompt_farming_account_flow(account_store: "MultiAccountStore") -> tuple:
+def prompt_farming_account_flow(
+    account_store: "MultiAccountStore",
+    *,
+    output: Callable[[str], None] = print,
+    signal: Any = None,
+) -> tuple:
     """Menu interaktif sebelum login: single atau multi, tambah akun, pilih akun.
 
     Return (mode, selected):
       - ("single", [username])   -> login 1 akun tersimpan
       - ("single", None)         -> kredensial baru (caller panggil obtain_credentials)
       - ("multi", [usernames])   -> login subset/multi akun
+
+    Jika signal diberikan (dari StartupSignal):
+    - Jika signal.selected_account_flow sudah ada, langsung return-nya.
+    - Jika tidak, tunggu input terminal ATAU signal dari Telegram.
     """
+    # Jalur cepat: signal Telegram sudah terisi sebelum fungsi dipanggil
+    if signal is not None and getattr(signal, "selected_account_flow", None) is not None:
+        flow = signal.selected_account_flow
+        output(f"[AKUN] Akun dipilih via Telegram.")
+        return flow
+
+    # Tanpa signal: alur CLI synchronous (100% backward compatible)
+    if signal is None:
+        return _prompt_farming_account_flow_cli(account_store)
+
+    # Ada signal: dengarkan terminal DAN Telegram secara asinkron
+    import queue as _q
+    result_q: _q.Queue[tuple] = _q.Queue()
+
+    def _run_cli_in_thread() -> None:
+        try:
+            result = _prompt_farming_account_flow_cli(account_store)
+            result_q.put(result)
+        except Exception:
+            pass
+
+    cli_thread = __import__("threading").Thread(target=_run_cli_in_thread, daemon=True)
+    cli_thread.start()
+
+    while True:
+        # 1. Cek signal Telegram
+        if getattr(signal, "selected_account_flow", None) is not None:
+            flow = signal.selected_account_flow
+            output(f"\n[AKUN] Akun dipilih via Telegram.")
+            return flow
+        # 2. Cek input terminal
+        try:
+            return result_q.get_nowait()
+        except _q.Empty:
+            pass
+        __import__("time").sleep(0.1)
+
+
+def _prompt_farming_account_flow_cli(account_store: "MultiAccountStore") -> tuple:
+    """Alur CLI synchronous murni (tidak ada signal/thread)."""
     while True:
         usernames = account_store.list_usernames()
         print("\nAKUN FARMING")
@@ -728,7 +777,16 @@ def run(server_name: str = config.DEFAULT_SERVER, target_map: str | None = None,
         # Farming mode: interaktif — tanya single/multi dulu sebelum login
         if selected is RunMode.FARMING and not multi:
             account_store = MultiAccountStore()
-            mode_choice, selected_users = prompt_farming_account_flow(account_store)
+            if bootstrap is not None:
+                startup_orch = getattr(getattr(bootstrap, "control", None), "orch", None)
+                if startup_orch is not None:
+                    startup_orch.account_store = account_store
+            if startup_signal is not None:
+                startup_signal.set_mode(RunMode.FARMING)
+            prompt_kw = {"signal": startup_signal} if startup_signal is not None else {}
+            mode_choice, selected_users = prompt_farming_account_flow(
+                account_store, **prompt_kw
+            )
             if mode_choice == "multi":
                 return run_multi(
                     server_name=server_name,

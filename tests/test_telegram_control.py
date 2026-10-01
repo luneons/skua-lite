@@ -596,13 +596,20 @@ def test_startup_mode_shows_startup_buttons_not_farming_buttons():
 
 
 def test_startup_callback_mode_selection_updates_signal():
-    """Menekan tombol mode di Telegram mengeset pilihan mode di startup_signal."""
+    """Menekan tombol mode di Telegram mengeset pilihan mode di startup_signal dan menampilkan tombol akun."""
     from skua_lite.mode import StartupSignal, RunMode
 
     transport = FakeTransport()
     calls: list[tuple] = []
     signal = StartupSignal()
-    startup_orch = SimpleNamespace(bot=None, farming=None, startup=True, startup_signal=signal)
+    fake_store = SimpleNamespace(list_usernames=lambda: ["hero1", "hero2"])
+    startup_orch = SimpleNamespace(
+        bot=None,
+        farming=None,
+        startup=True,
+        startup_signal=signal,
+        account_store=fake_store,
+    )
     control = _control(transport, calls, orch=startup_orch)
 
     control.handle_callback(_callback("special|mode|2"))
@@ -610,7 +617,90 @@ def test_startup_callback_mode_selection_updates_signal():
     assert signal.selected_mode is RunMode.FARMING
     assert len(transport.edits) == 1
     _, _, text, buttons = transport.edits[0]
-    assert "FARMING" in text.upper()
+    assert "AKUN" in text.upper() or "FARMING" in text.upper()
+    labels = [b["text"] for row in buttons for b in row]
+    assert any("hero1" in l for l in labels)
+    assert any("hero2" in l for l in labels)
+    assert any("Semua" in l or "Multi" in l for l in labels)
+    assert any("Kredensial Baru" in l for l in labels)
+
+
+def test_startup_callback_select_single_account():
+    """Menekan tombol akun di Telegram mengeset selected_account_flow ke single [username]."""
+    from skua_lite.mode import StartupSignal, RunMode
+
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    signal = StartupSignal()
+    signal.set_mode(RunMode.FARMING)
+    fake_store = SimpleNamespace(list_usernames=lambda: ["hero1", "hero2"])
+    startup_orch = SimpleNamespace(
+        bot=None,
+        farming=None,
+        startup=True,
+        startup_signal=signal,
+        account_store=fake_store,
+    )
+    control = _control(transport, calls, orch=startup_orch)
+
+    control.handle_callback(_callback("special|start_acc|hero1"))
+
+    assert signal.selected_account_flow == ("single", ["hero1"])
+    assert len(transport.edits) == 1
+    _, _, text, _ = transport.edits[0]
+    assert "hero1" in text
+
+
+def test_startup_callback_select_all_accounts_multi():
+    """Menekan tombol Semua (Multi) di Telegram mengeset selected_account_flow ke multi [usernames]."""
+    from skua_lite.mode import StartupSignal, RunMode
+
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    signal = StartupSignal()
+    signal.set_mode(RunMode.FARMING)
+    fake_store = SimpleNamespace(list_usernames=lambda: ["hero1", "hero2"])
+    startup_orch = SimpleNamespace(
+        bot=None,
+        farming=None,
+        startup=True,
+        startup_signal=signal,
+        account_store=fake_store,
+    )
+    control = _control(transport, calls, orch=startup_orch)
+
+    control.handle_callback(_callback("special|start_acc|__all__"))
+
+    assert signal.selected_account_flow == ("multi", ["hero1", "hero2"])
+    assert len(transport.edits) == 1
+    _, _, text, _ = transport.edits[0]
+    assert "SEMUA" in text.upper() or "MULTI" in text.upper()
+
+
+def test_startup_callback_reset_mode_restores_mode_buttons():
+    """Menekan tombol Ganti Mode mereset signal dan mengembalikan tombol mode."""
+    from skua_lite.mode import StartupSignal, RunMode
+
+    transport = FakeTransport()
+    calls: list[tuple] = []
+    signal = StartupSignal()
+    signal.set_mode(RunMode.FARMING)
+    startup_orch = SimpleNamespace(
+        bot=None,
+        farming=None,
+        startup=True,
+        startup_signal=signal,
+    )
+    control = _control(transport, calls, orch=startup_orch)
+
+    control.handle_callback(_callback("special|reset_mode|"))
+
+    assert signal.selected_mode is None
+    assert len(transport.edits) == 1
+    _, _, _, buttons = transport.edits[0]
+    labels = [b["text"] for row in buttons for b in row]
+    assert any("AI Asisten" in l for l in labels)
+    assert any("Farming" in l for l in labels)
 
 
 

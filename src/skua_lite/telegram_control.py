@@ -332,6 +332,41 @@ def startup_buttons() -> list[list[dict[str, str]]]:
     ]
 
 
+def startup_account_buttons(usernames: list[str] | None = None) -> list[list[dict[str, str]]]:
+    """Tombol kontekstual saat Mode Farming dipilih dan menunggu pilihan akun."""
+    if usernames is None:
+        try:
+            from .credentials import MultiAccountStore
+            usernames = MultiAccountStore().list_usernames()
+        except Exception:
+            usernames = []
+
+    rows: list[list[dict[str, str]]] = []
+    # 1. Tombol per akun untuk login langsung (maksimal 2 per baris)
+    row: list[dict[str, str]] = []
+    for name in usernames:
+        row.append({"text": f"👤 {name}", "callback_data": f"special|start_acc|{name}"})
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+
+    # 2. Tombol multi jika ada lebih dari 1 akun
+    if len(usernames) > 1:
+        rows.append([{"text": "👥 Jalankan Semua (Multi)", "callback_data": "special|start_acc|__all__"}])
+
+    # 3. Kredensial baru
+    rows.append([{"text": "➕ Masuk Kredensial Baru", "callback_data": "special|start_acc|__new__"}])
+
+    # 4. Navigasi kembali dan refresh
+    rows.append([
+        {"text": "🔙 Ganti Mode", "callback_data": "special|reset_mode|"},
+        {"text": "🔄 Cek Status", "callback_data": "special|panel|"},
+    ])
+    return rows
+
+
 def help_text() -> str:
     return (
         "SKUA-LITE TELEGRAM CONTROL\n"
@@ -391,6 +426,15 @@ class TelegramControl:
 
     def _current_buttons(self) -> list[list[dict[str, str]]]:
         if bool(getattr(self.orch, "startup", False)):
+            signal = getattr(self.orch, "startup_signal", None)
+            chosen_mode = getattr(signal, "selected_mode", None)
+            from .mode import RunMode
+            if chosen_mode is RunMode.FARMING and getattr(signal, "selected_account_flow", None) is None:
+                store = getattr(self.orch, "account_store", None)
+                users = store.list_usernames() if store is not None else None
+                return startup_account_buttons(users)
+            if getattr(signal, "selected_account_flow", None) is not None:
+                return [[{"text": "🔄 Cek Status", "callback_data": "special|panel|"}]]
             return startup_buttons()
         return panel_buttons()
 
@@ -728,14 +772,48 @@ class TelegramControl:
             except Exception as exc:
                 return _bounded(f"Panel multi belum siap: {exc}")
         if bool(getattr(self.orch, "startup", False)):
+            signal = getattr(self.orch, "startup_signal", None)
+            chosen_mode = getattr(signal, "selected_mode", None)
+            from .mode import RunMode
+            if chosen_mode is RunMode.FARMING:
+                if getattr(signal, "selected_account_flow", None) is not None:
+                    flow = signal.selected_account_flow
+                    return (
+                        "=== SKUA-LITE STARTUP ===\n"
+                        f"Akun dipilih: {flow[0]} ({flow[1]})\n"
+                        "Status: Menghubungkan ke game server...\n"
+                        "Tekan 'Cek Status' saat bot sudah masuk map."
+                    )
+                store = getattr(self.orch, "account_store", None)
+                if store is not None:
+                    users = store.list_usernames()
+                else:
+                    try:
+                        from .credentials import MultiAccountStore
+                        users = MultiAccountStore().list_usernames()
+                    except Exception:
+                        users = []
+                if users:
+                    u_str = "\n".join(f"  • {u}" for u in users)
+                    return (
+                        "=== SKUA-LITE STARTUP: PILIH AKUN FARMING ===\n"
+                        f"Akun tersimpan:\n{u_str}\n\n"
+                        "Pilih tombol akun di bawah untuk langsung login (Single / Multi), "
+                        "atau pilih di terminal."
+                    )
+                return (
+                    "=== SKUA-LITE STARTUP: PILIH AKUN FARMING ===\n"
+                    "Belum ada akun tersimpan.\n"
+                    "Pilih 'Masuk Kredensial Baru' atau masukkan akun di terminal."
+                )
             return (
                 "=== SKUA-LITE STARTUP ===\n"
-                "Status: Menunggu pemilihan mode di terminal.\n\n"
+                "Status: Menunggu pemilihan mode.\n\n"
                 "Langkah:\n"
-                "1. Di terminal: pilih [1] MODE AI ASISTEN atau [2] MODE FARMING\n"
-                "2. Masukkan akun / pilih akun tersimpan\n"
+                "1. Pilih [1] MODE AI ASISTEN atau [2] MODE FARMING\n"
+                "2. Pilih akun yang tersimpan\n"
                 "3. Panel kontrol (Dashboard, Combat, dll) otomatis aktif setelah login.\n\n"
-                "Tekan tombol 'Cek Status' setelah login selesai."
+                "Tekan tombol mode di bawah untuk memilih langsung."
             )
         from .cli import farm_dashboard_lines
 
@@ -791,13 +869,74 @@ class TelegramControl:
             signal = getattr(self.orch, "startup_signal", None)
             if signal is not None:
                 signal.set_mode(chosen_mode)
+
+            if chosen_mode is RunMode.FARMING:
+                store = getattr(self.orch, "account_store", None)
+                if store is not None:
+                    users = store.list_usernames()
+                else:
+                    try:
+                        from .credentials import MultiAccountStore
+                        users = MultiAccountStore().list_usernames()
+                    except Exception:
+                        users = []
+                if users:
+                    u_str = "\n".join(f"  • {u}" for u in users)
+                    text = (
+                        "=== SKUA-LITE STARTUP: PILIH AKUN FARMING ===\n"
+                        f"Mode FARMING aktif.\n\n"
+                        f"Akun tersimpan:\n{u_str}\n\n"
+                        "Pilih akun di bawah untuk langsung login:"
+                    )
+                else:
+                    text = (
+                        "=== SKUA-LITE STARTUP: PILIH AKUN FARMING ===\n"
+                        "Belum ada akun tersimpan.\n"
+                        "Pilih 'Masuk Kredensial Baru' atau masukkan akun di terminal."
+                    )
+                new_buttons = startup_account_buttons(users)
+            else:
                 text = (
                     f"✅ Mode {chosen_mode.label} dipilih via Telegram!\n"
-                    f"Terminal sedang memproses mode {chosen_mode.label}..."
+                    f"Terminal sedang login / memuat akun AI Asisten..."
                 )
+                new_buttons = self._current_buttons()
+        elif kind == "special" and action == "start_acc":
+            signal = getattr(self.orch, "startup_signal", None)
+            store = getattr(self.orch, "account_store", None)
+            if store is not None:
+                users = store.list_usernames()
             else:
-                text = f"Mode {chosen_mode.label} dipilih. Lanjutkan di terminal."
-            new_buttons = self._current_buttons()
+                try:
+                    from .credentials import MultiAccountStore
+                    users = MultiAccountStore().list_usernames()
+                except Exception:
+                    users = []
+
+            if arg == "__all__":
+                flow = ("multi", list(users))
+                msg = f"✅ SEMUA akun ({len(users)}) dipilih (Multi-bot)!"
+            elif arg == "__new__":
+                flow = ("single", None)
+                msg = "✅ Mode Kredensial Baru dipilih.\nMasukkan kredensial login di terminal."
+            else:
+                target_user = str(arg)
+                flow = ("single", [target_user])
+                msg = f"✅ Akun '{target_user}' dipilih!"
+
+            if signal is not None:
+                signal.set_account_flow(flow)
+            text = f"{msg}\nSedang menghubungkan ke server..."
+            new_buttons = [[{"text": "🔄 Cek Status", "callback_data": "special|panel|"}]]
+        elif kind == "special" and action == "reset_mode":
+            signal = getattr(self.orch, "startup_signal", None)
+            if signal is not None:
+                signal.reset()
+            text = (
+                "=== SKUA-LITE STARTUP ===\n"
+                "Pilih mode yang ingin dijalankan:"
+            )
+            new_buttons = startup_buttons()
         elif kind == "special" and action == "settings":
             text = self._settings_text()
             new_buttons = self._settings_buttons()

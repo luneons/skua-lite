@@ -20,15 +20,25 @@ class RunMode(str, Enum):
 
 
 class StartupSignal:
-    """Thread-safe signal untuk sinkronisasi pilihan mode via Telegram/CLI."""
+    """Thread-safe signal untuk sinkronisasi pilihan mode dan akun via Telegram/CLI."""
 
     def __init__(self) -> None:
         self.selected_mode: RunMode | None = None
+        self.selected_account_flow: tuple[str, list[str] | None] | None = None
         self._event = threading.Event()
 
-    def set_mode(self, mode: RunMode) -> None:
+    def set_mode(self, mode: RunMode | None) -> None:
         self.selected_mode = mode
         self._event.set()
+
+    def set_account_flow(self, flow: tuple[str, list[str] | None]) -> None:
+        self.selected_account_flow = flow
+        self._event.set()
+
+    def reset(self) -> None:
+        self.selected_mode = None
+        self.selected_account_flow = None
+        self._event.clear()
 
     def wait(self, timeout: float | None = None) -> bool:
         return self._event.wait(timeout)
