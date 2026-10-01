@@ -195,6 +195,20 @@ class FarmingRuntime:
                                 target=s.target or "*",
                             )
                             self.leveling_dependency = dep
+                elif cmd == "initUserData":
+                    # Ambil strQuests array untuk menentukan status story progression
+                    data = obj.get("data") or {}
+                    slots: list[str] = []
+                    for key in ("strQuests", "strQuests2", "strQuests3", "strQuests4",
+                                "strQuests5", "strQuests6", "strQuests7"):
+                        chunk = str(data.get(key) or "")
+                        slots.extend(list(chunk))
+                    if slots:
+                        self.quest_state.note_quest_slots(slots)
+                        self._on_log(
+                            f"[CHARDATA] strQuests loaded ({len(slots)} slots); "
+                            f"slot395={slots[395] if len(slots) > 395 else '?'}"
+                        )
                 elif cmd == "ccqr":
                     quest_id = int(obj.get("QuestID", 0) or 0)
                     success = int(obj.get("bSuccess", 0) or 0) == 1
@@ -774,9 +788,12 @@ class FarmingRuntime:
         except Exception:
             return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
         planner = SCWDependencyPlanner(self.quest_state)
-        # Story-lock mengalahkan unlock: kalau turn-in farming pernah ditolak
-        # karena prerequisite, paksa story sampai 7977 benar-benar ccqr-sukses.
-        if getattr(self, "_scw_story_locked", False):
+        # 1. Sumber otoritatif utama: strQuests slot dari data server
+        # Bila server menyatakan slot 395 < 10, story Seven Circles PASTI
+        # belum selesai di akun ini. Jangan ke sevencircleswar dan jangan
+        # fallback ke bracket biasa: langsung kerjakan story 7968 di sevencircles!
+        story_check = planner.story_requirement_checked()
+        if story_check is False or getattr(self, "_scw_story_locked", False):
             step = planner.next_prerequisite()
             if step is not None:
                 self.leveling_dependency = step
@@ -784,14 +801,16 @@ class FarmingRuntime:
                                  step.pad, target=step.target,
                                  quests=(step.quest_id,))
             return self._level_bracket(int(getattr(self.bot, "level", 1) or 1))
+
+        # 2. Bila story terbukti selesai (slot >= 10 atau ccqr 7977 sukses)
         if planner.unlocked():
             spot = planner.best_xp_spot()
             if spot is not None:
                 return LevelSpot(spot.map_name, spot.cell, spot.pad,
                                  target=spot.target, quests=spot.quests)
 
-        # Probe quest farming adalah sumber kebenaran. Status unknown berarti
-        # belum ada verdict server; tetap pakai bracket biasa sampai jawaban.
+        # 3. Fallback bila data slot belum ada (server belum kirim initUserData):
+        # Gunakan probe quest 7981 sebagai sinyal
         probe_status = self.quest_state.status(7981)
         if probe_status.accepted is False:
             step = planner.next_prerequisite()

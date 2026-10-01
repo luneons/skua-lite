@@ -31,6 +31,26 @@ class QuestState:
     def __init__(self) -> None:
         self._quests: dict[int, QuestStatus] = {}
         self._item_qty: dict[int, int] = {}  # ItemID -> qty terakhir dari addItems/getDrop
+        self._quest_slots: list[str] = []  # strQuests array dari initUserData (index -> char)
+
+    def note_quest_slots(self, slots: list[str]) -> None:
+        """Simpan strQuests array dari initUserData (index = slot)."""
+        self._quest_slots = list(slots)
+
+    def quest_slot_value(self, slot: int) -> int | None:
+        """Nilai slot quest karakter (None = belum ada data server)."""
+        try:
+            return int(self._quest_slots[int(slot)])
+        except (IndexError, ValueError, TypeError):
+            return None
+
+    def story_requirement_met(self, slot: int, value: int) -> bool | None:
+        """True jika slot karakter >= value yang disyaratkan quest.
+        False jika kurang. None jika data server belum tersedia."""
+        current = self.quest_slot_value(slot)
+        if current is None:
+            return None
+        return current >= int(value)
 
     def status(self, quest_id: int) -> QuestStatus:
         qid = int(quest_id)
@@ -114,6 +134,19 @@ class QuestState:
             return False
         obj = parsed.get("obj") or {}
         cmd = str(parsed.get("cmd") or "")
+        if cmd == "initUserData":
+            data = obj.get("data") or {}
+            if not isinstance(data, dict):
+                return False
+            slots: list[str] = []
+            for key in ("strQuests", "strQuests2", "strQuests3", "strQuests4",
+                        "strQuests5", "strQuests6", "strQuests7"):
+                chunk = str(data.get(key) or "")
+                slots.extend(list(chunk))
+            if not slots:
+                return False
+            self.note_quest_slots(slots)
+            return True
         if cmd == "acceptQuest":
             qid = _int(obj.get("QuestID"))
             if qid <= 0:

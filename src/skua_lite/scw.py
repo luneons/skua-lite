@@ -45,6 +45,10 @@ SEVEN_CIRCLES_CHAIN: tuple[QuestStep, ...] = (
 )
 
 SCW_GATE_QUEST = 7977
+# Syarat story dari live getQuests(7977): slot quest 395, nilai 10.
+# strQuests[395] >= 10 berarti Seven Circles selesai; kurang dari itu = belum.
+SCW_GATE_SLOT = 395
+SCW_GATE_VALUE = 10
 SCW_XP_SPOT = XPSpot("sevencircleswar", "Enter", "Right", (7979, 7980, 7981), target="Wrath Guard")
 
 
@@ -54,12 +58,35 @@ class SCWDependencyPlanner:
     def __init__(self, quest_state: Any) -> None:
         self.quests = quest_state
 
-    def unlocked(self) -> bool:
-        """Farming terbuka HANYA jika 7977 sudah selesai (ccqr sukses), atau
-        server sudah menerima salah satu quest farming (7979/7980/7981).
-        Menerima quest 7977 saja TIDAK cukup — server bisa terima acceptQuest(7977)
-        walau story di akun belum selesai.
+    def story_requirement_checked(self) -> bool | None:
+        """Status story dari strQuests server (bukan tebakan dari accept).
+
+        True = slot 395 >= 10 (Seven Circles selesai).
+        False = slot 395 < 10 (Seven Circles BELUM selesai).
+        None = data server belum tersedia (fallback ke probe).
         """
+        try:
+            met = self.quests.story_requirement_met(SCW_GATE_SLOT, SCW_GATE_VALUE)
+        except AttributeError:
+            return None
+        return met
+
+    def unlocked(self) -> bool:
+        """Farming terbuka HANYA jika syarat story 7977 terpenuhi.
+
+        Prioritas:
+        1. strQuests slot 395 >= 10 -> story selesai -> True.
+           strQuests slot 395 < 10 -> story BELUM selesai -> False.
+        2. ccqr 7977 sukses -> True.
+        3. Farming quest (7979/7980/7981) di-accept -> True (fallback).
+           Catatan: accept saja BUKAN bukti mutlak — turn-in farming yang
+           ditolak server tetap mengaktifkan _scw_story_locked.
+        """
+        story = self.story_requirement_checked()
+        if story is True:
+            return True
+        if story is False:
+            return False
         if self.quests.completed(SCW_GATE_QUEST):
             return True
         for q in (7979, 7980, 7981):
