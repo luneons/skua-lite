@@ -971,9 +971,11 @@ class FarmingRuntime:
             if dependency is not None and dependency.map_item_id > 0:
                 self.scw_story.execute_step(dependency)
             elif spot.target and spot.target != "*":
-                self.combat.set_map_wide(False)
+                # Hunt mode untuk step story tanpa cell spesifik: cari di seluruh map
+                is_hunt = not bool(spot.cell) or (spot.cell == "Enter" and spot.map_name != "sevencircleswar")
+                self.combat.set_map_wide(is_hunt)
                 self.combat.set_target(spot.target)
-                self.combat.set_auto(False)
+                self.combat.set_auto(is_hunt)
                 if not self.combat.running:
                     self.combat.start()
             else:
