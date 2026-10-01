@@ -371,6 +371,10 @@ class TelegramControl:
             run_command = dispatch_farm
         self.run_command = run_command
 
+    def attach(self, orch: Any) -> None:
+        """Ganti orchestrator yang dikontrol saat mode/login telah selesai."""
+        self.orch = orch
+
     def _authorize(self, user_id: int, chat_id: int, *, callback_id: str = "") -> bool:
         if self.owner_id is None:
             text = (
@@ -403,6 +407,9 @@ class TelegramControl:
             if not results:
                 return "Tidak ada akun aktif."
             return _bounded(self.orch.format_broadcast(results))
+        # Jika bot belum login (misal masih di menu startup)
+        if bool(getattr(self.orch, "startup", False)):
+            return "Bot belum terhubung ke game (sedang di menu startup terminal)."
         stream = io.StringIO()
         with redirect_stdout(stream):
             result = self.run_command(self.orch, action, arg)
@@ -688,6 +695,12 @@ class TelegramControl:
                 return _bounded(self.orch.dashboard_text())
             except Exception as exc:
                 return _bounded(f"Panel multi belum siap: {exc}")
+        if bool(getattr(self.orch, "startup", False)):
+            return (
+                "=== SKUA-LITE STARTUP ===\n"
+                "Status: Menunggu pemilihan mode / login di terminal.\n"
+                "Pilih [1] MODE AI ASISTEN atau [2] MODE FARMING."
+            )
         from .cli import farm_dashboard_lines
 
         try:
@@ -841,3 +854,36 @@ class TelegramControlService:
         thread = self.thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2.0)
+
+
+def start_bootstrap_telegram(
+    config: TelegramConfig | None = None,
+    *,
+    on_log: Callable[[str], None] | None = None,
+) -> TelegramControlService | None:
+    """Mulai Telegram control polling sejak menu startup (sebelum login)."""
+    cfg = config or TelegramConfig.from_env()
+    if not cfg.enabled:
+        return None
+    from types import SimpleNamespace
+    startup_orch = SimpleNamespace(
+        bot=None,
+        farming=None,
+        is_multi=False,
+        server_name="-",
+        mode=None,
+        startup=True,
+    )
+    control = TelegramControl(
+        startup_orch,
+        TelegramTransport(cfg.token),
+        owner_id=cfg.owner_id,
+    )
+    service = TelegramControlService(control, on_log=on_log or (lambda _m: None))
+    try:
+        service.start()
+        return service
+    except Exception as exc:
+        if on_log:
+            on_log(f"[TELEGRAM] Gagal bootstrap Telegram: {exc}")
+        return None

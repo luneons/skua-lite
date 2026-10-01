@@ -24,6 +24,7 @@ from .telegram_control import (
     TelegramControl,
     TelegramControlService,
     TelegramTransport,
+    start_bootstrap_telegram,
 )
 
 
@@ -363,7 +364,9 @@ class Orchestrator:
 
     def start_telegram_control(self, config: TelegramConfig | None = None) -> bool:
         """Start one owner-only Telegram long-poll controller when configured."""
-        if self.mode is not RunMode.FARMING or self.farming is None or self.bot is None:
+        if self.telegram is not None:
+            return True
+        if self.farming is None or self.bot is None:
             return False
         cfg = config or TelegramConfig.from_env()
         if not cfg.enabled:
@@ -625,6 +628,7 @@ def run_multi(
     *,
     accounts: MultiAccountStore | None = None,
     selected_usernames: list[str] | None = None,
+    telegram: Any = None,
 ) -> int:
     """Login akun tersimpan (atau subset terpilih) sebagai satu kelompok farming."""
     from .multi_session import MultiOrchestrator
@@ -678,9 +682,16 @@ def run_multi(
         print(f"[MULTI] {len(failures)} akun gagal, {group.slot_count()} akun tetap aktif.")
 
     try:
-        started = group.start_telegram_control()
-        if not started:
-            print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
+        if telegram is not None:
+            try:
+                telegram.control.attach(group)
+                group.telegram = telegram
+            except Exception:
+                pass
+        else:
+            started = group.start_telegram_control()
+            if not started:
+                print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
         cli.multi_farm_menu_loop(group)
     finally:
         group.shutdown()
@@ -690,81 +701,104 @@ def run(server_name: str = config.DEFAULT_SERVER, target_map: str | None = None,
         store: credentials.CredentialStore | None = None,
         mode: str | RunMode | None = None, multi: bool = False) -> int:
     """Entry point utama: pilih mode dulu, baru login (atau fan-out multi)."""
+    # Telegram bootstrap aktif sejak menu startup (sebelum blocking input mode)
+    # dan attach ke orchestrator yang terhubung.
+    bootstrap = start_bootstrap_telegram(on_log=print)
+    if bootstrap is not None:
+        print("[TELEGRAM] control aktif di Telegram. Pilih mode & akun di terminal.")
+    else:
+        print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
     try:
-        selected = select_mode(mode)
-    except ValueError as e:
-        print(f"\n[ABORT] {e}", file=sys.stderr)
-        return 2
-    if multi:
-        if selected is not RunMode.FARMING:
-            print("[ABORT] --multi hanya tersedia untuk mode farming.", file=sys.stderr)
+        try:
+            selected = select_mode(mode)
+        except ValueError as e:
+            print(f"\n[ABORT] {e}", file=sys.stderr)
             return 2
-        return run_multi(server_name=server_name, target_map=target_map)
-    # Farming mode: interaktif — tanya single/multi dulu sebelum login
-    if selected is RunMode.FARMING and not multi:
-        account_store = MultiAccountStore()
-        mode_choice, selected_users = prompt_farming_account_flow(account_store)
-        if mode_choice == "multi":
-            return run_multi(
-                server_name=server_name,
-                target_map=target_map,
-                accounts=account_store,
-                selected_usernames=selected_users,
-            )
-        # single dengan akun tersimpan
-        if mode_choice == "single" and selected_users is not None:
-            username = selected_users[0]
-            try:
-                _u, password = account_store.load(username)
-            except Exception as exc:
-                print(f"\n[FATAL] gagal baca kredensial '{username}': {exc}", file=sys.stderr)
-                return 1
-            slot_store = credentials.CredentialStore(
-                base_dir=account_store.base_dir / "slots" / username
-            )
-            slot_store.save(username, password)
-            orch = Orchestrator(server_name=server_name, target_map=target_map,
-                                store=slot_store, mode=selected)
-            try:
-                orch.connect(username, password)
-            except (login.LoginFailed, servers.ServerUnavailable, bot_mod.BotError) as e:
-                print(f"\n[FATAL] {e}", file=sys.stderr)
-                orch.shutdown()
-                return 1
-            except RuntimeError as e:
-                print(f"\n[ABORT] {e}", file=sys.stderr)
+        if multi:
+            if selected is not RunMode.FARMING:
+                print("[ABORT] --multi hanya tersedia untuk mode farming.", file=sys.stderr)
                 return 2
-            try:
-                started = orch.start_telegram_control()
-                if not started:
-                    print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
+            return run_multi(server_name=server_name, target_map=target_map, telegram=bootstrap)
+        # Farming mode: interaktif — tanya single/multi dulu sebelum login
+        if selected is RunMode.FARMING and not multi:
+            account_store = MultiAccountStore()
+            mode_choice, selected_users = prompt_farming_account_flow(account_store)
+            if mode_choice == "multi":
+                return run_multi(
+                    server_name=server_name,
+                    target_map=target_map,
+                    accounts=account_store,
+                    selected_usernames=selected_users,
+                    telegram=bootstrap,
+                )
+            # single dengan akun tersimpan
+            if mode_choice == "single" and selected_users is not None:
+                username = selected_users[0]
+                try:
+                    _u, password = account_store.load(username)
+                except Exception as exc:
+                    print(f"\n[FATAL] gagal baca kredensial '{username}': {exc}", file=sys.stderr)
+                    return 1
+                slot_store = credentials.CredentialStore(
+                    base_dir=account_store.base_dir / "slots" / username
+                )
+                slot_store.save(username, password)
+                orch = Orchestrator(server_name=server_name, target_map=target_map,
+                                    store=slot_store, mode=selected)
+                try:
+                    orch.connect(username, password)
+                except (login.LoginFailed, servers.ServerUnavailable, bot_mod.BotError) as e:
+                    print(f"\n[FATAL] {e}", file=sys.stderr)
+                    orch.shutdown()
+                    return 1
+                except RuntimeError as e:
+                    print(f"\n[ABORT] {e}", file=sys.stderr)
+                    return 2
+                try:
+                    _adopt_bootstrap_or_start(orch, bootstrap)
+                    cli.farm_menu_loop(orch)
+                finally:
+                    orch.shutdown()
+                return 0
+            # single dengan kredensial baru (selected_users is None)
+
+        orch = Orchestrator(server_name=server_name, target_map=target_map,
+                            store=store, mode=selected)
+        try:
+            username, password = orch.obtain_credentials()
+            orch.connect(username, password)
+        except (login.LoginFailed, servers.ServerUnavailable, bot_mod.BotError) as e:
+            print(f"\n[FATAL] {e}", file=sys.stderr)
+            orch.shutdown()
+            return 1
+        except RuntimeError as e:
+            print(f"\n[ABORT] {e}", file=sys.stderr)
+            return 2
+
+        try:
+            if orch.farming is not None:
+                _adopt_bootstrap_or_start(orch, bootstrap)
                 cli.farm_menu_loop(orch)
-            finally:
-                orch.shutdown()
-            return 0
-        # single dengan kredensial baru (selected_users is None)
-
-    orch = Orchestrator(server_name=server_name, target_map=target_map,
-                        store=store, mode=selected)
-    try:
-        username, password = orch.obtain_credentials()
-        orch.connect(username, password)
-    except (login.LoginFailed, servers.ServerUnavailable, bot_mod.BotError) as e:
-        print(f"\n[FATAL] {e}", file=sys.stderr)
-        orch.shutdown()
-        return 1
-    except RuntimeError as e:
-        print(f"\n[ABORT] {e}", file=sys.stderr)
-        return 2
-
-    try:
-        if orch.farming is not None:
-            started = orch.start_telegram_control()
-            if not started:
-                print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
-            cli.farm_menu_loop(orch)
-        else:
-            cli.menu_loop(orch.bot)
+            else:
+                _adopt_bootstrap_or_start(orch, bootstrap)
+                cli.menu_loop(orch.bot)
+        finally:
+            orch.shutdown()
+        return 0
     finally:
-        orch.shutdown()
-    return 0
+        if bootstrap is not None:
+            bootstrap.stop()
+
+
+def _adopt_bootstrap_or_start(orch: Orchestrator, bootstrap: Any) -> None:
+    """Lampirkan bootstrap yang sudah aktif ke orchestrator; jatuh kembali ke start biasa."""
+    if bootstrap is not None:
+        try:
+            bootstrap.control.attach(orch)
+            orch.telegram = bootstrap
+            return
+        except Exception:
+            pass
+    started = orch.start_telegram_control()
+    if not started:
+        print("[TELEGRAM] tidak dikonfigurasi; isi .env untuk mengaktifkan.")
